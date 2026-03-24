@@ -4,22 +4,26 @@ const VoiceResponse = require('twilio').twiml.VoiceResponse;
 
 app.use(express.urlencoded({ extended: false }));
 
-// ROOT (for browser test)
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
 
-// TWILIO VOICE ROUTE
-app.post('/voice', (req, res) => {
+function buildVoiceResponse() {
   const twiml = new VoiceResponse();
+  twiml.say('Welcome to R L Small Engines. Please say your name.');
+  return twiml.toString();
+}
 
-  twiml.say('Welcome to RL Small Engines. Please say your name.');
-
+app.get('/voice', (req, res) => {
   res.type('text/xml');
-  res.send(twiml.toString());
+  res.send(buildVoiceResponse());
 });
 
-// START SERVER
+app.post('/voice', (req, res) => {
+  res.type('text/xml');
+  res.send(buildVoiceResponse());
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
