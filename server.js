@@ -87,10 +87,6 @@ function saveCall(data) {
   fs.appendFileSync(CALLS_FILE, JSON.stringify(data) + '\n');
 }
 
-function rootMessage() {
-  return 'RL AI Receptionist is running';
-}
-
 function buildVoiceResponse() {
   return `
     <Response>
@@ -103,7 +99,7 @@ function buildVoiceResponse() {
 }
 
 app.get('/', (req, res) => {
-  res.send(rootMessage());
+  res.send('RL AI Receptionist is running');
 });
 
 app.get('/voice', (req, res) => {
@@ -165,7 +161,7 @@ app.post('/getMachine', (req, res) => {
   res.type('text/xml');
   res.send(`
     <Response>
-      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkMachine?name=${encodeURIComponent(name)}&machine=${encodeURIComponent(spokenMachine)}" method="POST">
+      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkMachine?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(spokenMachine)}" method="POST">
         <Say>I heard ${xmlEscape(spokenMachine)}. If this is correct, press 1. To say the machine again, press 2.</Say>
       </Gather>
       <Say>We did not receive a response. Goodbye.</Say>
@@ -206,7 +202,7 @@ app.post('/checkMachine', (req, res) => {
 
   res.send(`
     <Response>
-      <Gather input="speech" action="/getIssue?name=${encodeURIComponent(name)}&machine=${encodeURIComponent(detectedMachine)}" method="POST" speechTimeout="auto" timeout="6">
+      <Gather input="speech" action="/getIssue?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(detectedMachine)}" method="POST" speechTimeout="auto" timeout="6">
         <Say>Got it. You said ${xmlEscape(detectedMachine)}. What problem are you having?</Say>
       </Gather>
       <Say>I did not hear anything. Goodbye.</Say>
@@ -222,7 +218,7 @@ app.post('/getIssue', (req, res) => {
   res.type('text/xml');
   res.send(`
     <Response>
-      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkIssue?name=${encodeURIComponent(name)}&machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}" method="POST">
+      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkIssue?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST">
         <Say>I heard ${xmlEscape(issue)}. If this is correct, press 1. To say the problem again, press 2.</Say>
       </Gather>
       <Say>We did not receive a response. Goodbye.</Say>
@@ -241,7 +237,7 @@ app.post('/checkIssue', (req, res) => {
   if (choice === '2') {
     res.send(`
       <Response>
-        <Gather input="speech" action="/getIssue?name=${encodeURIComponent(name)}&machine=${encodeURIComponent(machine)}" method="POST" speechTimeout="auto" timeout="6">
+        <Gather input="speech" action="/getIssue?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}" method="POST" speechTimeout="auto" timeout="6">
           <Say>Please say the problem again.</Say>
         </Gather>
         <Say>I did not hear anything. Goodbye.</Say>
@@ -252,7 +248,7 @@ app.post('/checkIssue', (req, res) => {
 
   res.send(`
     <Response>
-      <Gather input="dtmf" numDigits="5" timeout="10" action="/getZip?name=${encodeURIComponent(name)}&machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}" method="POST">
+      <Gather input="dtmf" numDigits="5" timeout="10" action="/getZip?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST">
         <Say>Please enter your five digit zip code using your keypad.</Say>
       </Gather>
       <Say>We did not receive your zip code. Goodbye.</Say>
@@ -270,7 +266,7 @@ app.post('/getZip', (req, res) => {
   res.type('text/xml');
   res.send(`
     <Response>
-      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkZip?name=${encodeURIComponent(name)}&machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}" method="POST">
+      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkZip?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}" method="POST">
         <Say>You entered zip code ${spokenZip}. If this is correct, press 1. To re enter your zip code, press 2.</Say>
       </Gather>
       <Say>We did not receive a response. Goodbye.</Say>
@@ -290,7 +286,7 @@ app.post('/checkZip', (req, res) => {
   if (choice === '2') {
     res.send(`
       <Response>
-        <Gather input="dtmf" numDigits="5" timeout="10" action="/getZip?name=${encodeURIComponent(name)}&machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}" method="POST">
+        <Gather input="dtmf" numDigits="5" timeout="10" action="/getZip?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST">
           <Say>Please re enter your five digit zip code using your keypad.</Say>
         </Gather>
         <Say>We did not receive your zip code. Goodbye.</Say>
@@ -305,7 +301,7 @@ app.post('/checkZip', (req, res) => {
       <Response>
         <Say>Sorry, we do not currently service zip code ${spokenZip}.</Say>
         <Say>Please leave your name, number, and message after the tone.</Say>
-        <Record maxLength="60" action="/voicemail?name=${encodeURIComponent(name)}&machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}" method="POST" />
+        <Record maxLength="60" action="/voicemail?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}" method="POST" />
         <Say>We did not receive a message. Goodbye.</Say>
       </Response>
     `);
@@ -315,7 +311,7 @@ app.post('/checkZip', (req, res) => {
   res.send(`
     <Response>
       <Say>Thank you. We do service your area.</Say>
-      <Gather input="dtmf" numDigits="10" timeout="10" action="/getPhone?name=${encodeURIComponent(name)}&machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}" method="POST">
+      <Gather input="dtmf" numDigits="10" timeout="10" action="/getPhone?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}" method="POST">
         <Say>Please enter your ten digit phone number using your keypad.</Say>
       </Gather>
       <Say>We did not receive your phone number. Goodbye.</Say>
@@ -334,7 +330,7 @@ app.post('/getPhone', (req, res) => {
   res.type('text/xml');
   res.send(`
     <Response>
-      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkPhone?name=${encodeURIComponent(name)}&machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&phone=${encodeURIComponent(phone)}" method="POST">
+      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkPhone?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;phone=${encodeURIComponent(phone)}" method="POST">
         <Say>You entered phone number ${spokenPhone}. If this is correct, press 1. To re enter your phone number, press 2.</Say>
       </Gather>
       <Say>We did not receive a response. Goodbye.</Say>
@@ -355,7 +351,7 @@ app.post('/checkPhone', (req, res) => {
   if (choice === '2') {
     res.send(`
       <Response>
-        <Gather input="dtmf" numDigits="10" timeout="10" action="/getPhone?name=${encodeURIComponent(name)}&machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}" method="POST">
+        <Gather input="dtmf" numDigits="10" timeout="10" action="/getPhone?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}" method="POST">
           <Say>Please re enter your ten digit phone number using your keypad.</Say>
         </Gather>
         <Say>We did not receive your phone number. Goodbye.</Say>
@@ -366,7 +362,7 @@ app.post('/checkPhone', (req, res) => {
 
   res.send(`
     <Response>
-      <Gather input="dtmf" numDigits="1" timeout="10" action="/getRequestType?name=${encodeURIComponent(name)}&machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&phone=${encodeURIComponent(phone)}" method="POST">
+      <Gather input="dtmf" numDigits="1" timeout="10" action="/getRequestType?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;phone=${encodeURIComponent(phone)}" method="POST">
         <Say>Press 1 to leave a message for follow up. Press 2 to request an appointment.</Say>
       </Gather>
       <Say>We did not receive a response. Goodbye.</Say>
