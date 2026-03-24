@@ -1,427 +1,336 @@
-const express = require('express');
-const fs = require('fs');
-const app = express();
+// src/screens/SettingsScreen.js
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+} from 'react-native';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import { colors, fonts, radius } from '../utils/theme';
+import { JOB_STATUSES } from '../components/AddAppointmentModal';
 
-app.use(express.urlencoded({ extended: false }));
-app.use(express.json());
+const DEFAULT_NAME = 'RL Small Engines';
 
-const serviceAreaZips = ['20724', '21054', '21113'];
-const CALLS_FILE = 'calls.txt';
-
-const machineMap = {
-  'Lawn Mower': [
-    'lawn mower',
-    'lawnmower',
-    'mower',
-    'push mower',
-    'zero turn',
-    'zeroturn'
-  ],
-  'Riding Mower': [
-    'riding mower',
-    'riding lawn mower',
-    'rider'
-  ],
-  'Generator': [
-    'generator',
-    'gen'
-  ],
-  'Pressure Washer': [
-    'pressure washer',
-    'pressurewasher',
-    'power washer',
-    'powerwasher'
-  ],
-  'Snowblower': [
-    'snowblower',
-    'snow blower',
-    'snow thrower'
-  ]
+const formatDateFull = (dt) => {
+  if (!dt) return '';
+  const d = new Date(dt);
+  return d.toLocaleDateString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+  }) + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 };
 
-function cleanText(text) {
-  return (text || '')
-    .toLowerCase()
-    .replace(/[^\w\s]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+// Use the saved status field; fall back to date-based label for old records
+const getStatusLabel = (appt) => {
+  if (appt.status) {
+    const meta = JOB_STATUSES.find((s) => s.key === appt.status);
+    return meta ? meta.label : appt.status;
+  }
+  if (appt.completed) return 'Completed';
+  if (appt.dateTime && new Date(appt.dateTime) < new Date()) return 'Past';
+  return 'Upcoming';
+};
 
-function displayText(text) {
-  const cleaned = cleanText(text);
-  if (!cleaned) return 'Unknown';
-  return cleaned
-    .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
+const csvField = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`;
 
-function detectMachine(input) {
-  const cleaned = cleanText(input);
+export default function SettingsScreen({ businessName, onBusinessNameChange, appointments }) {
+  const [draft, setDraft] = useState(businessName);
+  const [exporting, setExporting] = useState(false);
 
-  for (const machineName of Object.keys(machineMap)) {
-    for (const phrase of machineMap[machineName]) {
-      if (cleaned.includes(phrase)) {
-        return machineName;
-      }
+  const handleSave = () => {
+    const trimmed = draft.trim() || DEFAULT_NAME;
+    onBusinessNameChange(trimmed);
+    setDraft(trimmed);
+    Alert.alert('Saved', `Business name updated to "${trimmed}"`);
+  };
+
+  const handleReset = () => {
+    Alert.alert('Reset to Default', `Reset business name to "${DEFAULT_NAME}"?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Reset',
+        onPress: () => {
+          setDraft(DEFAULT_NAME);
+          onBusinessNameChange(DEFAULT_NAME);
+        },
+      },
+    ]);
+  };
+
+  const handleExport = async () => {
+    if (!appointments || appointments.length === 0) {
+      Alert.alert('No Data', 'There are no appointments to export.');
+      return;
     }
-  }
 
-  return null;
-}
+    setExporting(true);
+    try {
+      const headers = [
+        'Customer Name',
+        'Phone',
+        'Address',
+        'City',
+        'State',
+        'Zip',
+        'Job Type',
+        'Date & Time',
+        'Job Status',
+        'Completed Date',
+        'Notes',
+      ];
 
-function xmlEscape(text) {
-  return String(text || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
+      const rows = appointments.map((a) => {
+        const completedDate = a.completedAt
+          ? new Date(a.completedAt).toLocaleDateString('en-US', {
+              month: 'short', day: 'numeric', year: 'numeric',
+            })
+          : '';
+        return [
+          csvField(a.name),
+          csvField(a.phone),
+          csvField(a.address),
+          csvField(a.city),
+          csvField(a.state),
+          csvField(a.zip),
+          csvField(a.jobType),
+          csvField(formatDateFull(a.dateTime)),
+          csvField(getStatusLabel(a)),
+          csvField(completedDate),
+          csvField(a.notes),
+        ].join(',');
+      });
 
-function formatDigitsForSpeech(digits) {
-  return (digits || '').split('').join(' ');
-}
+      const csv = [headers.map(csvField).join(','), ...rows].join('\n');
 
-function saveCall(data) {
-  fs.appendFileSync(CALLS_FILE, JSON.stringify(data) + '\n');
-}
+      const date = new Date().toISOString().slice(0, 10);
+      const filename = `${businessName.replace(/\s+/g, '_')}_appointments_${date}.csv`;
+      const fileUri = FileSystem.documentDirectory + filename;
 
-function buildVoiceResponse() {
-  return `
-    <Response>
-      <Gather input="speech" action="/getName" method="POST" speechTimeout="auto" timeout="5">
-        <Say>Welcome to R L Small Engines. Please say your name.</Say>
-      </Gather>
-      <Say>I did not hear anything. Goodbye.</Say>
-    </Response>
-  `;
-}
+      await FileSystem.writeAsStringAsync(fileUri, csv, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
 
-app.get('/', (req, res) => {
-  res.send('RL AI Receptionist is running');
-});
-
-app.get('/voice', (req, res) => {
-  res.type('text/xml');
-  res.send(buildVoiceResponse());
-});
-
-app.post('/voice', (req, res) => {
-  res.type('text/xml');
-  res.send(buildVoiceResponse());
-});
-
-app.post('/getName', (req, res) => {
-  const name = displayText(req.body.SpeechResult);
-
-  res.type('text/xml');
-  res.send(`
-    <Response>
-      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkName?name=${encodeURIComponent(name)}" method="POST">
-        <Say>I heard ${xmlEscape(name)}. If this is correct, press 1. To say your name again, press 2.</Say>
-      </Gather>
-      <Say>We did not receive a response. Goodbye.</Say>
-    </Response>
-  `);
-});
-
-app.post('/checkName', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const choice = req.body.Digits || '';
-
-  res.type('text/xml');
-
-  if (choice === '2') {
-    res.send(`
-      <Response>
-        <Gather input="speech" action="/getName" method="POST" speechTimeout="auto" timeout="5">
-          <Say>Please say your name again.</Say>
-        </Gather>
-        <Say>I did not hear anything. Goodbye.</Say>
-      </Response>
-    `);
-    return;
-  }
-
-  res.send(`
-    <Response>
-      <Gather input="speech" action="/getMachine?name=${encodeURIComponent(name)}" method="POST" speechTimeout="auto" timeout="5">
-        <Say>Thank you ${xmlEscape(name)}. What machine are you calling about? For example, lawn mower, riding mower, generator, pressure washer, or snowblower.</Say>
-      </Gather>
-      <Say>I did not hear anything. Goodbye.</Say>
-    </Response>
-  `);
-});
-
-app.post('/getMachine', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const spokenMachine = displayText(req.body.SpeechResult);
-
-  res.type('text/xml');
-  res.send(`
-    <Response>
-      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkMachine?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(spokenMachine)}" method="POST">
-        <Say>I heard ${xmlEscape(spokenMachine)}. If this is correct, press 1. To say the machine again, press 2.</Say>
-      </Gather>
-      <Say>We did not receive a response. Goodbye.</Say>
-    </Response>
-  `);
-});
-
-app.post('/checkMachine', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const spokenMachine = req.query.machine || 'Unknown';
-  const choice = req.body.Digits || '';
-
-  res.type('text/xml');
-
-  if (choice === '2') {
-    res.send(`
-      <Response>
-        <Gather input="speech" action="/getMachine?name=${encodeURIComponent(name)}" method="POST" speechTimeout="auto" timeout="5">
-          <Say>Please say the machine again.</Say>
-        </Gather>
-        <Say>I did not hear anything. Goodbye.</Say>
-      </Response>
-    `);
-    return;
-  }
-
-  const detectedMachine = detectMachine(spokenMachine);
-
-  if (!detectedMachine) {
-    res.send(`
-      <Response>
-        <Say>Sorry, we do not service that type of equipment.</Say>
-        <Say>Please call again for supported machines. Goodbye.</Say>
-      </Response>
-    `);
-    return;
-  }
-
-  res.send(`
-    <Response>
-      <Gather input="speech" action="/getIssue?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(detectedMachine)}" method="POST" speechTimeout="auto" timeout="6">
-        <Say>Got it. You said ${xmlEscape(detectedMachine)}. What problem are you having?</Say>
-      </Gather>
-      <Say>I did not hear anything. Goodbye.</Say>
-    </Response>
-  `);
-});
-
-app.post('/getIssue', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const machine = req.query.machine || 'Unknown';
-  const issue = displayText(req.body.SpeechResult);
-
-  res.type('text/xml');
-  res.send(`
-    <Response>
-      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkIssue?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST">
-        <Say>I heard ${xmlEscape(issue)}. If this is correct, press 1. To say the problem again, press 2.</Say>
-      </Gather>
-      <Say>We did not receive a response. Goodbye.</Say>
-    </Response>
-  `);
-});
-
-app.post('/checkIssue', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const machine = req.query.machine || 'Unknown';
-  const issue = req.query.issue || 'Unknown';
-  const choice = req.body.Digits || '';
-
-  res.type('text/xml');
-
-  if (choice === '2') {
-    res.send(`
-      <Response>
-        <Gather input="speech" action="/getIssue?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}" method="POST" speechTimeout="auto" timeout="6">
-          <Say>Please say the problem again.</Say>
-        </Gather>
-        <Say>I did not hear anything. Goodbye.</Say>
-      </Response>
-    `);
-    return;
-  }
-
-  res.send(`
-    <Response>
-      <Gather input="dtmf" numDigits="5" timeout="10" action="/getZip?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST">
-        <Say>Please enter your five digit zip code using your keypad.</Say>
-      </Gather>
-      <Say>We did not receive your zip code. Goodbye.</Say>
-    </Response>
-  `);
-});
-
-app.post('/getZip', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const machine = req.query.machine || 'Unknown';
-  const issue = req.query.issue || 'Unknown';
-  const zip = (req.body.Digits || '').slice(0, 5);
-  const spokenZip = formatDigitsForSpeech(zip);
-
-  res.type('text/xml');
-  res.send(`
-    <Response>
-      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkZip?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}" method="POST">
-        <Say>You entered zip code ${spokenZip}. If this is correct, press 1. To re enter your zip code, press 2.</Say>
-      </Gather>
-      <Say>We did not receive a response. Goodbye.</Say>
-    </Response>
-  `);
-});
-
-app.post('/checkZip', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const machine = req.query.machine || 'Unknown';
-  const issue = req.query.issue || 'Unknown';
-  const zip = req.query.zip || '';
-  const choice = req.body.Digits || '';
-
-  res.type('text/xml');
-
-  if (choice === '2') {
-    res.send(`
-      <Response>
-        <Gather input="dtmf" numDigits="5" timeout="10" action="/getZip?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST">
-          <Say>Please re enter your five digit zip code using your keypad.</Say>
-        </Gather>
-        <Say>We did not receive your zip code. Goodbye.</Say>
-      </Response>
-    `);
-    return;
-  }
-
-  if (!serviceAreaZips.includes(zip)) {
-    const spokenZip = formatDigitsForSpeech(zip);
-    res.send(`
-      <Response>
-        <Say>Sorry, we do not currently service zip code ${spokenZip}.</Say>
-        <Say>Please leave your name, number, and message after the tone.</Say>
-        <Record maxLength="60" action="/voicemail?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}" method="POST" />
-        <Say>We did not receive a message. Goodbye.</Say>
-      </Response>
-    `);
-    return;
-  }
-
-  res.send(`
-    <Response>
-      <Say>Thank you. We do service your area.</Say>
-      <Gather input="dtmf" numDigits="10" timeout="10" action="/getPhone?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}" method="POST">
-        <Say>Please enter your ten digit phone number using your keypad.</Say>
-      </Gather>
-      <Say>We did not receive your phone number. Goodbye.</Say>
-    </Response>
-  `);
-});
-
-app.post('/getPhone', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const machine = req.query.machine || 'Unknown';
-  const issue = req.query.issue || 'Unknown';
-  const zip = req.query.zip || 'Unknown';
-  const phone = (req.body.Digits || '').slice(0, 10);
-  const spokenPhone = formatDigitsForSpeech(phone);
-
-  res.type('text/xml');
-  res.send(`
-    <Response>
-      <Gather input="dtmf" numDigits="1" timeout="10" action="/checkPhone?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;phone=${encodeURIComponent(phone)}" method="POST">
-        <Say>You entered phone number ${spokenPhone}. If this is correct, press 1. To re enter your phone number, press 2.</Say>
-      </Gather>
-      <Say>We did not receive a response. Goodbye.</Say>
-    </Response>
-  `);
-});
-
-app.post('/checkPhone', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const machine = req.query.machine || 'Unknown';
-  const issue = req.query.issue || 'Unknown';
-  const zip = req.query.zip || 'Unknown';
-  const phone = req.query.phone || '';
-  const choice = req.body.Digits || '';
-
-  res.type('text/xml');
-
-  if (choice === '2') {
-    res.send(`
-      <Response>
-        <Gather input="dtmf" numDigits="10" timeout="10" action="/getPhone?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}" method="POST">
-          <Say>Please re enter your ten digit phone number using your keypad.</Say>
-        </Gather>
-        <Say>We did not receive your phone number. Goodbye.</Say>
-      </Response>
-    `);
-    return;
-  }
-
-  res.send(`
-    <Response>
-      <Gather input="dtmf" numDigits="1" timeout="10" action="/getRequestType?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;phone=${encodeURIComponent(phone)}" method="POST">
-        <Say>Press 1 to leave a message for follow up. Press 2 to request an appointment.</Say>
-      </Gather>
-      <Say>We did not receive a response. Goodbye.</Say>
-    </Response>
-  `);
-});
-
-app.post('/getRequestType', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const machine = req.query.machine || 'Unknown';
-  const issue = req.query.issue || 'Unknown';
-  const zip = req.query.zip || 'Unknown';
-  const phone = req.query.phone || '';
-  const choice = req.body.Digits || '';
-
-  const requestType = choice === '2' ? 'Appointment Request' : 'Message';
-
-  const data = {
-    requestType,
-    name,
-    machine,
-    issue,
-    zip,
-    phone,
-    time: new Date().toISOString()
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'text/csv',
+          dialogTitle: 'Export Appointments CSV',
+          UTI: 'public.comma-separated-values-text',
+        });
+      } else {
+        Alert.alert('Exported', `File saved to:\n${fileUri}`);
+      }
+    } catch (e) {
+      console.log('Export error:', e);
+      Alert.alert('Export Failed', 'Something went wrong. Please try again.');
+    } finally {
+      setExporting(false);
+    }
   };
 
-  saveCall(data);
+  const hasChanges = draft.trim() !== businessName;
 
-  res.type('text/xml');
-  res.send(`
-    <Response>
-      <Say>Thank you. Your ${requestType.toLowerCase()} has been received. We will contact you shortly. Goodbye.</Say>
-    </Response>
-  `);
-});
+  // Status counts for export meta
+  const statusCounts = JOB_STATUSES.map((s) => ({
+    ...s,
+    count: appointments?.filter((a) => a.status === s.key).length ?? 0,
+  }));
 
-app.post('/voicemail', (req, res) => {
-  const data = {
-    requestType: 'Out Of Area Voicemail',
-    name: req.query.name || 'Unknown',
-    machine: req.query.machine || 'Unknown',
-    issue: req.query.issue || 'Unknown',
-    zip: req.query.zip || 'Unknown',
-    recording: req.body.RecordingUrl || '',
-    time: new Date().toISOString()
-  };
+  return (
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView keyboardShouldPersistTaps="handled">
+        {/* Business name section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>BUSINESS NAME</Text>
+          <Text style={styles.sectionSub}>
+            Shown in the app header across all screens
+          </Text>
+          <TextInput
+            style={styles.input}
+            value={draft}
+            onChangeText={setDraft}
+            placeholder="Enter your business name"
+            placeholderTextColor={colors.textMuted}
+            maxLength={40}
+            returnKeyType="done"
+            onSubmitEditing={handleSave}
+          />
+          <Text style={styles.charCount}>{draft.length}/40</Text>
 
-  saveCall(data);
+          <TouchableOpacity
+            style={[styles.saveBtn, !hasChanges && styles.saveBtnDisabled]}
+            onPress={handleSave}
+            disabled={!hasChanges}
+          >
+            <Text style={[styles.saveBtnTxt, !hasChanges && styles.saveBtnTxtDisabled]}>
+              Save Name
+            </Text>
+          </TouchableOpacity>
 
-  res.type('text/xml');
-  res.send(`
-    <Response>
-      <Say>Thank you. Your message has been recorded. Goodbye.</Say>
-    </Response>
-  `);
-});
+          {businessName !== DEFAULT_NAME && (
+            <TouchableOpacity style={styles.resetBtn} onPress={handleReset}>
+              <Text style={styles.resetTxt}>Reset to default</Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log('Server running on port ' + PORT);
+        {/* Preview */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>PREVIEW</Text>
+          <View style={styles.previewBar}>
+            <Text style={styles.previewTitle}>{draft.trim() || DEFAULT_NAME}</Text>
+          </View>
+        </View>
+
+        {/* Export section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>EXPORT DATA</Text>
+          <Text style={styles.sectionSub}>
+            Export all appointments to a CSV file you can open in Excel
+          </Text>
+
+          {/* Status breakdown */}
+          <View style={styles.exportMeta}>
+            <Text style={styles.exportTotal}>
+              📋 {appointments?.length ?? 0} total
+            </Text>
+            <View style={styles.statusBreakdown}>
+              {statusCounts.map((s) => (
+                <View key={s.key} style={styles.statusCount}>
+                  <Text style={[styles.statusCountNum, { color: s.color }]}>{s.count}</Text>
+                  <Text style={styles.statusCountLbl}>{s.emoji} {s.label}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.exportBtn, exporting && styles.exportBtnDisabled]}
+            onPress={handleExport}
+            disabled={exporting}
+          >
+            <Text style={styles.exportBtnTxt}>
+              {exporting ? 'Exporting…' : '📤 Export to CSV'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* App info */}
+        <View style={styles.infoSection}>
+          <Text style={styles.infoTxt}>RL Scheduler</Text>
+          <Text style={styles.infoSub}>Small engine repair scheduling app</Text>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.bg },
+
+  section: {
+    margin: 16,
+    marginBottom: 8,
+    backgroundColor: colors.card,
+    borderRadius: radius.md,
+    padding: 16,
+  },
+  sectionLabel: {
+    color: colors.accent,
+    fontSize: fonts.sm,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    marginBottom: 4,
+  },
+  sectionSub: {
+    color: colors.textMuted,
+    fontSize: fonts.sm,
+    marginBottom: 14,
+  },
+
+  input: {
+    backgroundColor: colors.bg,
+    borderRadius: radius.md,
+    padding: 12,
+    color: colors.text,
+    fontSize: fonts.lg,
+    fontWeight: '600',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  charCount: {
+    color: colors.textMuted,
+    fontSize: fonts.sm,
+    textAlign: 'right',
+    marginTop: 4,
+    marginBottom: 12,
+  },
+
+  saveBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: radius.md,
+    padding: 13,
+    alignItems: 'center',
+  },
+  saveBtnDisabled: { backgroundColor: colors.border },
+  saveBtnTxt: { color: colors.white, fontSize: fonts.base, fontWeight: '700' },
+  saveBtnTxtDisabled: { color: colors.textMuted },
+
+  resetBtn: { alignItems: 'center', marginTop: 12 },
+  resetTxt: { color: colors.textMuted, fontSize: fonts.sm },
+
+  previewBar: {
+    backgroundColor: colors.bg,
+    borderRadius: radius.md,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+  },
+  previewTitle: { color: colors.text, fontSize: fonts.lg, fontWeight: '700' },
+
+  // Export
+  exportMeta: {
+    backgroundColor: colors.bg,
+    borderRadius: radius.md,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: 14,
+  },
+  exportTotal: {
+    color: colors.text,
+    fontSize: fonts.md,
+    fontWeight: '600',
+    marginBottom: 10,
+  },
+  statusBreakdown: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  statusCount: { alignItems: 'center' },
+  statusCountNum: { fontSize: fonts.lg, fontWeight: '700' },
+  statusCountLbl: { color: colors.textMuted, fontSize: fonts.sm, marginTop: 2 },
+
+  exportBtn: {
+    backgroundColor: '#1565c0',
+    borderRadius: radius.md,
+    padding: 13,
+    alignItems: 'center',
+  },
+  exportBtnDisabled: { backgroundColor: colors.border },
+  exportBtnTxt: { color: colors.white, fontSize: fonts.base, fontWeight: '700' },
+
+  infoSection: { alignItems: 'center', marginTop: 24, marginBottom: 40 },
+  infoTxt: { color: colors.textMuted, fontSize: fonts.sm, fontWeight: '600' },
+  infoSub: { color: colors.textMuted, fontSize: fonts.sm, marginTop: 2 },
 });
