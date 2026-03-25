@@ -488,3 +488,28 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('Server running on port ' + PORT);
 });
+app.get('/test-firebase', async (req, res) => {
+  try {
+    const admin = require('firebase-admin');
+
+    if (!admin.apps.length) {
+      const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
+
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+      });
+    }
+
+    const db = admin.firestore();
+
+    await db.collection('test').add({
+      message: 'Firebase connected',
+      time: new Date(),
+    });
+
+    res.send('Firebase WORKING');
+  } catch (err) {
+    console.log(err);
+    res.send('Firebase FAILED');
+  }
+});
