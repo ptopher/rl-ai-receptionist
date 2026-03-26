@@ -46,40 +46,6 @@ const weeklyCountyPlan = {
   }
 };
 
-const machineMap = {
-  Lawnmower: [
-    'lawn mower',
-    'lawnmower',
-    'mower',
-    'push mower',
-    'zero turn',
-    'zeroturn'
-  ],
-  'Riding mower': [
-    'riding mower',
-    'ridingmower',
-    'riding lawn mower',
-    'ride mower',
-    'lawn tractor',
-    'rider'
-  ],
-  Generator: [
-    'generator',
-    'gen'
-  ],
-  'Pressure washer': [
-    'pressure washer',
-    'pressurewasher',
-    'power washer',
-    'powerwasher'
-  ],
-  Snowblower: [
-    'snowblower',
-    'snow blower',
-    'snow thrower'
-  ]
-};
-
 function cleanText(text) {
   return (text || '')
     .toLowerCase()
@@ -93,44 +59,53 @@ function titleCase(text) {
   if (!cleaned) return 'Unknown';
   return cleaned
     .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
 }
 
 function detectMachine(input) {
   const cleaned = cleanText(input);
-  const compressed = cleaned.replace(/\s+/g, '');
 
-  if (cleaned === 'riding mower' || compressed === 'ridingmower') {
+  // ===== RIDING MOWER FIRST =====
+  if (
+    cleaned.includes('riding') ||
+    cleaned.includes('tractor') ||
+    cleaned.includes('lawn tractor') ||
+    cleaned.includes('ride mower') ||
+    cleaned.includes('rider')
+  ) {
     return 'Riding mower';
   }
-  if (cleaned === 'lawn mower' || compressed === 'lawnmower' || cleaned === 'mower') {
+
+  // ===== PUSH MOWER / STANDARD MOWER =====
+  if (
+    cleaned.includes('lawn mower') ||
+    cleaned === 'mower' ||
+    cleaned.includes('push mower')
+  ) {
     return 'Lawnmower';
   }
-  if (cleaned === 'generator' || cleaned === 'gen') {
+
+  // ===== GENERATOR =====
+  if (cleaned.includes('generator') || cleaned === 'gen') {
     return 'Generator';
   }
+
+  // ===== PRESSURE WASHER =====
   if (
-    cleaned === 'pressure washer' ||
-    compressed === 'pressurewasher' ||
-    cleaned === 'power washer' ||
-    compressed === 'powerwasher'
+    cleaned.includes('pressure washer') ||
+    cleaned.includes('power washer')
   ) {
     return 'Pressure washer';
   }
-  if (cleaned === 'snowblower' || cleaned === 'snow blower' || cleaned === 'snow thrower') {
+
+  // ===== SNOWBLOWER =====
+  if (
+    cleaned.includes('snow blower') ||
+    cleaned.includes('snowblower') ||
+    cleaned.includes('snow thrower')
+  ) {
     return 'Snowblower';
-  }
-
-  for (const machineName of Object.keys(machineMap)) {
-    for (const phrase of machineMap[machineName]) {
-      const phraseClean = cleanText(phrase);
-      const phraseCompressed = phraseClean.replace(/\s+/g, '');
-
-      if (cleaned.includes(phraseClean) || compressed.includes(phraseCompressed)) {
-        return machineName;
-      }
-    }
   }
 
   return null;
@@ -651,7 +626,7 @@ app.get('/jobs', (req, res) => {
 
   html += '<ul>';
 
-  jobs.forEach(job => {
+  jobs.forEach((job) => {
     html += `<li>
       <strong>${job.time || ''}</strong><br>
       Type: ${job.requestType || ''}<br>
