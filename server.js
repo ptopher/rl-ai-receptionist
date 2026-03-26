@@ -54,11 +54,11 @@ const countyZips = {
   ]
 };
 
-// ===== MACHINE DETECTION =====
+// ===== HELPERS =====
 function cleanText(text) {
   return (text || '')
     .toLowerCase()
-    .replace(/[^\w\s]/g, '')
+    .replace(/[^\w\s@.\-]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -72,51 +72,6 @@ function titleCase(text) {
     .join(' ');
 }
 
-function detectMachine(input) {
-  const cleaned = cleanText(input);
-
-  // Riding mower first
-  if (
-    cleaned.includes('riding') ||
-    cleaned.includes('tractor') ||
-    cleaned.includes('lawn tractor') ||
-    cleaned.includes('ride mower') ||
-    cleaned.includes('rider')
-  ) {
-    return 'Riding mower';
-  }
-
-  if (
-    cleaned.includes('lawn mower') ||
-    cleaned === 'mower' ||
-    cleaned.includes('push mower')
-  ) {
-    return 'Lawnmower';
-  }
-
-  if (cleaned.includes('generator') || cleaned === 'gen') {
-    return 'Generator';
-  }
-
-  if (
-    cleaned.includes('pressure washer') ||
-    cleaned.includes('power washer')
-  ) {
-    return 'Pressure washer';
-  }
-
-  if (
-    cleaned.includes('snow blower') ||
-    cleaned.includes('snowblower') ||
-    cleaned.includes('snow thrower')
-  ) {
-    return 'Snowblower';
-  }
-
-  return null;
-}
-
-// ===== GENERAL HELPERS =====
 function formatDigitsForSpeech(digits) {
   return (digits || '').split('').join(' ');
 }
@@ -131,10 +86,7 @@ function xmlEscape(text) {
 }
 
 function loadJobs() {
-  if (!fs.existsSync(JOBS_FILE)) {
-    return [];
-  }
-
+  if (!fs.existsSync(JOBS_FILE)) return [];
   try {
     return JSON.parse(fs.readFileSync(JOBS_FILE, 'utf8'));
   } catch {
@@ -150,6 +102,10 @@ function saveJob(job) {
   const jobs = loadJobs();
   jobs.push(job);
   saveAllJobs(jobs);
+}
+
+function generateJobId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function getCountyForZip(zip) {
@@ -190,8 +146,22 @@ function getDayNameInEastern(date) {
   }).format(date);
 }
 
-function generateJobId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+function getReadableDate(dateKey) {
+  if (!dateKey) return '';
+  const dt = new Date(`${dateKey}T12:00:00`);
+  return dt.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric'
+  });
+}
+
+function getAppointmentJobsForDate(jobs, serviceDate) {
+  return jobs.filter(
+    (job) =>
+      job.requestType === 'Appointment Request' &&
+      job.serviceDate === serviceDate
+  );
 }
 
 // ===== ZIP COORDINATES + DISTANCE =====
@@ -203,13 +173,10 @@ async function getZipCoordinates(zip) {
 
   try {
     const response = await fetch(`https://api.zippopotam.us/us/${zip}`);
-    if (!response.ok) {
-      return null;
-    }
+    if (!response.ok) return null;
 
     const data = await response.json();
     const place = data?.places?.[0];
-
     if (!place) return null;
 
     const coords = {
@@ -217,9 +184,7 @@ async function getZipCoordinates(zip) {
       lon: parseFloat(place.longitude)
     };
 
-    if (Number.isNaN(coords.lat) || Number.isNaN(coords.lon)) {
-      return null;
-    }
+    if (Number.isNaN(coords.lat) || Number.isNaN(coords.lon)) return null;
 
     zipCoordCache[zip] = coords;
     return coords;
@@ -230,7 +195,7 @@ async function getZipCoordinates(zip) {
 
 function haversineMiles(lat1, lon1, lat2, lon2) {
   const toRad = (deg) => (deg * Math.PI) / 180;
-  const R = 3958.8;
+  const earthRadiusMiles = 3958.8;
 
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
@@ -243,29 +208,63 @@ function haversineMiles(lat1, lon1, lat2, lon2) {
       Math.sin(dLon / 2);
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+  return earthRadiusMiles * c;
 }
 
 async function getDistanceFromHomeMiles(zip) {
   const homeCoords = await getZipCoordinates(routingConfig.homeZip);
   const jobCoords = await getZipCoordinates(zip);
 
-  if (!homeCoords || !jobCoords) {
-    return 999999;
-  }
+  if (!homeCoords || !jobCoords) return 999999;
 
   return haversineMiles(homeCoords.lat, homeCoords.lon, jobCoords.lat, jobCoords.lon);
 }
 
-// ===== ROUTING + LIMITS =====
-function getAppointmentJobsForDate(jobs, serviceDate) {
-  return jobs.filter(
-    (job) =>
-      job.requestType === 'Appointment Request' &&
-      job.serviceDate === serviceDate
-  );
+// ===== MACHINE DETECTION =====
+function detectMachine(input) {
+  const cleaned = cleanText(input);
+
+  if (
+    cleaned.includes('riding') ||
+    cleaned.includes('tractor') ||
+    cleaned.includes('lawn tractor') ||
+    cleaned.includes('ride mower') ||
+    cleaned.includes('rider')
+  ) {
+    return 'Riding mower';
+  }
+
+  if (
+    cleaned.includes('lawn mower') ||
+    cleaned === 'mower' ||
+    cleaned.includes('push mower')
+  ) {
+    return 'Lawnmower';
+  }
+
+  if (cleaned.includes('generator') || cleaned === 'gen') {
+    return 'Generator';
+  }
+
+  if (
+    cleaned.includes('pressure washer') ||
+    cleaned.includes('power washer')
+  ) {
+    return 'Pressure washer';
+  }
+
+  if (
+    cleaned.includes('snow blower') ||
+    cleaned.includes('snowblower') ||
+    cleaned.includes('snow thrower')
+  ) {
+    return 'Snowblower';
+  }
+
+  return null;
 }
 
+// ===== AVAILABILITY / ROUTING =====
 async function rebalanceFridaySaturdayJobs(serviceDate) {
   const jobs = loadJobs();
   const dayJobs = jobs.filter(
@@ -274,9 +273,7 @@ async function rebalanceFridaySaturdayJobs(serviceDate) {
       job.serviceDate === serviceDate
   );
 
-  if (dayJobs.length === 0) {
-    return;
-  }
+  if (dayJobs.length === 0) return;
 
   const enriched = [];
   for (const job of dayJobs) {
@@ -288,6 +285,7 @@ async function rebalanceFridaySaturdayJobs(serviceDate) {
 
   for (let i = 0; i < enriched.length; i += 1) {
     const current = enriched[i].job;
+
     if (i < routingConfig.fridaySaturdayMorningMax) {
       current.serviceWindow = routingConfig.fridaySaturdayMorningWindow;
     } else if (
@@ -306,10 +304,7 @@ async function rebalanceFridaySaturdayJobs(serviceDate) {
 
 async function findNextAvailableSlot(zip) {
   const matchingCounties = getCountyForZip(zip);
-
-  if (matchingCounties.length === 0) {
-    return null;
-  }
+  if (matchingCounties.length === 0) return null;
 
   const existingJobs = loadJobs();
   const now = getEasternNow();
@@ -321,9 +316,7 @@ async function findNextAvailableSlot(zip) {
     const serviceDate = formatEasternDateKey(future);
     const dayName = getDayNameInEastern(future);
 
-    if (dayName === 'Sunday') {
-      continue;
-    }
+    if (dayName === 'Sunday') continue;
 
     const dayJobs = getAppointmentJobsForDate(existingJobs, serviceDate);
 
@@ -334,9 +327,7 @@ async function findNextAvailableSlot(zip) {
       dayName === 'Thursday'
     ) {
       const targetCounty = routingConfig.mondayThroughThursdayPlan[dayName];
-      if (!matchingCounties.includes(targetCounty)) {
-        continue;
-      }
+      if (!matchingCounties.includes(targetCounty)) continue;
 
       if (dayJobs.length < routingConfig.mondayThursdayMax) {
         return {
@@ -350,91 +341,25 @@ async function findNextAvailableSlot(zip) {
       continue;
     }
 
-    if (dayName === 'Friday') {
-      const allowed = routingConfig.fridayAllowedCounties;
+    if (dayName === 'Friday' || dayName === 'Saturday') {
+      const allowed =
+        dayName === 'Friday'
+          ? routingConfig.fridayAllowedCounties
+          : routingConfig.saturdayAllowedCounties;
+
       const matchedAllowed = matchingCounties.find((county) =>
         allowed.includes(county)
       );
 
-      if (!matchedAllowed) {
-        continue;
-      }
+      if (!matchedAllowed) continue;
 
       if (
         dayJobs.length <
         routingConfig.fridaySaturdayMorningMax +
           routingConfig.fridaySaturdayAfternoonMax
       ) {
-        const tempCandidate = {
-          id: '__temp__',
-          zip
-        };
-
-        const compareList = [];
-
-        for (const job of dayJobs) {
-          compareList.push({
-            id: job.id,
-            zip: job.zip
-          });
-        }
-
-        compareList.push(tempCandidate);
-
-        const enriched = [];
-        for (const item of compareList) {
-          const distance = await getDistanceFromHomeMiles(item.zip);
-          enriched.push({ ...item, distance });
-        }
-
-        enriched.sort((a, b) => a.distance - b.distance);
-        const tempIndex = enriched.findIndex((item) => item.id === '__temp__');
-
-        const serviceWindow =
-          tempIndex < routingConfig.fridaySaturdayMorningMax
-            ? routingConfig.fridaySaturdayMorningWindow
-            : routingConfig.fridaySaturdayAfternoonWindow;
-
-        return {
-          serviceDate,
-          serviceDay: dayName,
-          serviceCounty: matchedAllowed,
-          serviceWindow
-        };
-      }
-
-      continue;
-    }
-
-    if (dayName === 'Saturday') {
-      const allowed = routingConfig.saturdayAllowedCounties;
-      const matchedAllowed = matchingCounties.find((county) =>
-        allowed.includes(county)
-      );
-
-      if (!matchedAllowed) {
-        continue;
-      }
-
-      if (
-        dayJobs.length <
-        routingConfig.fridaySaturdayMorningMax +
-          routingConfig.fridaySaturdayAfternoonMax
-      ) {
-        const tempCandidate = {
-          id: '__temp__',
-          zip
-        };
-
-        const compareList = [];
-
-        for (const job of dayJobs) {
-          compareList.push({
-            id: job.id,
-            zip: job.zip
-          });
-        }
-
+        const tempCandidate = { id: '__temp__', zip };
+        const compareList = dayJobs.map((job) => ({ id: job.id, zip: job.zip }));
         compareList.push(tempCandidate);
 
         const enriched = [];
@@ -469,12 +394,12 @@ async function findNextAvailableSlot(zip) {
   };
 }
 
-// ===== TWIML START =====
+// ===== CALL FLOW START =====
 function buildVoiceTwiml() {
   return `
 <Response>
-  <Gather input="speech" action="/getName" method="POST" speechTimeout="auto" timeout="5">
-    <Say>Hello, this is R L Small Engines. Please say your name.</Say>
+  <Gather input="speech" action="/getHelpRequest" method="POST" speechTimeout="auto" timeout="6">
+    <Say>Hello, you have reached Christopher's Small Engine Repair. My name is Emma. How can I help you today?</Say>
   </Gather>
   <Say>I did not hear anything. Goodbye.</Say>
 </Response>
@@ -495,91 +420,21 @@ app.post('/voice', (req, res) => {
   res.send(buildVoiceTwiml());
 });
 
-// ===== NAME =====
-app.post('/getName', (req, res) => {
-  const name = titleCase(req.body.SpeechResult);
+// ===== STEP 1: HELP REQUEST / EXTRACT MACHINE =====
+app.post('/getHelpRequest', (req, res) => {
+  const helpRequest = req.body.SpeechResult || '';
+  const detectedMachine = detectMachine(helpRequest);
 
   res.type('text/xml');
-  res.send(`
-<Response>
-  <Gather input="dtmf" numDigits="1" timeout="10" action="/checkName?name=${encodeURIComponent(name)}" method="POST">
-    <Say>I heard ${xmlEscape(name)}. If this is correct, press 1. To say your name again, press 2.</Say>
-  </Gather>
-  <Say>We did not receive a response. Goodbye.</Say>
-</Response>
-`.trim());
-});
-
-app.post('/checkName', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const choice = req.body.Digits || '';
-
-  res.type('text/xml');
-
-  if (choice === '2') {
-    res.send(`
-<Response>
-  <Gather input="speech" action="/getName" method="POST" speechTimeout="auto" timeout="5">
-    <Say>Please say your name again.</Say>
-  </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
-</Response>
-`.trim());
-    return;
-  }
-
-  res.send(`
-<Response>
-  <Gather input="speech" action="/getMachine?name=${encodeURIComponent(name)}" method="POST" speechTimeout="auto" timeout="5">
-    <Say>Thank you ${xmlEscape(name)}. What machine are you calling about? For example, lawnmower, riding mower, generator, pressure washer, or snowblower.</Say>
-  </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
-</Response>
-`.trim());
-});
-
-// ===== MACHINE =====
-app.post('/getMachine', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const rawMachine = req.body.SpeechResult || '';
-  const spokenMachine = titleCase(rawMachine);
-  const detectedMachine = detectMachine(rawMachine);
-
-  res.type('text/xml');
-  res.send(`
-<Response>
-  <Gather input="dtmf" numDigits="1" timeout="10" action="/checkMachine?name=${encodeURIComponent(name)}&amp;spoken=${encodeURIComponent(spokenMachine)}&amp;detected=${encodeURIComponent(detectedMachine || '')}" method="POST">
-    <Say>I heard ${xmlEscape(spokenMachine)}. If this is correct, press 1. To say the machine again, press 2.</Say>
-  </Gather>
-  <Say>We did not receive a response. Goodbye.</Say>
-</Response>
-`.trim());
-});
-
-app.post('/checkMachine', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const detectedMachine = req.query.detected || '';
-  const choice = req.body.Digits || '';
-
-  res.type('text/xml');
-
-  if (choice === '2') {
-    res.send(`
-<Response>
-  <Gather input="speech" action="/getMachine?name=${encodeURIComponent(name)}" method="POST" speechTimeout="auto" timeout="5">
-    <Say>Please say the machine again.</Say>
-  </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
-</Response>
-`.trim());
-    return;
-  }
 
   if (!detectedMachine) {
     res.send(`
 <Response>
-  <Say>Sorry, we do not service that type of equipment.</Say>
-  <Say>Please call again for supported machines. Goodbye.</Say>
+  <Say>Sorry, I could not tell what machine you need help with.</Say>
+  <Gather input="speech" action="/getHelpRequest" method="POST" speechTimeout="auto" timeout="6">
+    <Say>Please tell me what machine you need help with, like a lawnmower, riding mower, generator, pressure washer, or snowblower.</Say>
+  </Gather>
+  <Say>I did not hear anything. Goodbye.</Say>
 </Response>
 `.trim());
     return;
@@ -587,166 +442,137 @@ app.post('/checkMachine', (req, res) => {
 
   res.send(`
 <Response>
-  <Gather input="speech" action="/getIssue?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(detectedMachine)}" method="POST" speechTimeout="auto" timeout="6">
-    <Say>Got it. You said ${xmlEscape(detectedMachine)}.</Say>
-    <Pause length="1"/>
-    <Say>Please briefly describe the problem, like won't start, leaking, or making noise.</Say>
+  <Say>Got it. I can help you with that.</Say>
+  <Gather input="speech" action="/getIssue?machine=${encodeURIComponent(detectedMachine)}" method="POST" speechTimeout="auto" timeout="6">
+    <Say>Please briefly describe the problem with your ${xmlEscape(detectedMachine)}.</Say>
   </Gather>
   <Say>I did not hear anything. Goodbye.</Say>
 </Response>
 `.trim());
 });
 
-// ===== ISSUE =====
+// ===== STEP 2: ISSUE =====
 app.post('/getIssue', (req, res) => {
-  const name = req.query.name || 'Unknown';
   const machine = req.query.machine || 'Unknown';
   const issue = titleCase(req.body.SpeechResult);
 
   res.type('text/xml');
   res.send(`
 <Response>
-  <Gather input="dtmf" numDigits="1" timeout="10" action="/checkIssue?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST">
-    <Say>I heard ${xmlEscape(issue)}. If this is correct, press 1. To say the problem again, press 2.</Say>
-  </Gather>
-  <Say>We did not receive a response. Goodbye.</Say>
-</Response>
-`.trim());
-});
-
-app.post('/checkIssue', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const machine = req.query.machine || 'Unknown';
-  const issue = req.query.issue || 'Unknown';
-  const choice = req.body.Digits || '';
-
-  res.type('text/xml');
-
-  if (choice === '2') {
-    res.send(`
-<Response>
-  <Gather input="speech" action="/getIssue?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}" method="POST" speechTimeout="auto" timeout="6">
-    <Say>Please say the problem again.</Say>
+  <Gather input="speech" action="/scheduleDecision?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST" speechTimeout="auto" timeout="5">
+    <Say>Would you like to schedule an appointment?</Say>
   </Gather>
   <Say>I did not hear anything. Goodbye.</Say>
 </Response>
 `.trim());
+});
+
+// ===== STEP 3: SCHEDULE DECISION =====
+app.post('/scheduleDecision', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const decision = cleanText(req.body.SpeechResult || '');
+
+  const wantsAppointment =
+    decision.includes('yes') ||
+    decision.includes('schedule') ||
+    decision.includes('book') ||
+    decision.includes('appointment');
+
+  res.type('text/xml');
+
+  if (wantsAppointment) {
+    res.send(`
+<Response>
+  <Gather input="dtmf" numDigits="5" action="/getZipForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST" timeout="10">
+    <Say>Please enter your five digit zip code.</Say>
+  </Gather>
+  <Say>We did not receive your zip code. Goodbye.</Say>
+</Response>
+`.trim());
     return;
   }
 
   res.send(`
 <Response>
-  <Gather input="dtmf" numDigits="5" timeout="10" action="/getZip?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST">
-    <Say>Please enter your five digit zip code using your keypad.</Say>
+  <Gather input="speech" action="/getNameForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST" speechTimeout="auto" timeout="5">
+    <Say>No problem. Can I get your first and last name, please?</Say>
   </Gather>
-  <Say>We did not receive your zip code. Goodbye.</Say>
+  <Say>I did not hear anything. Goodbye.</Say>
 </Response>
 `.trim());
 });
 
-// ===== ZIP =====
-app.post('/getZip', (req, res) => {
-  const name = req.query.name || 'Unknown';
+// ===== STEP 4A: APPOINTMENT ZIP / CHECK AVAILABILITY =====
+app.post('/getZipForAppointment', async (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = (req.body.Digits || '').slice(0, 5);
-  const spokenZip = formatDigitsForSpeech(zip);
 
-  res.type('text/xml');
-  res.send(`
-<Response>
-  <Gather input="dtmf" numDigits="1" timeout="10" action="/checkZip?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}" method="POST">
-    <Say>You entered zip code ${spokenZip}. If this is correct, press 1. To re enter your zip code, press 2.</Say>
-  </Gather>
-  <Say>We did not receive a response. Goodbye.</Say>
-</Response>
-`.trim());
-});
-
-app.post('/checkZip', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const machine = req.query.machine || 'Unknown';
-  const issue = req.query.issue || 'Unknown';
-  const zip = req.query.zip || '';
-  const choice = req.body.Digits || '';
+  const slot = await findNextAvailableSlot(zip);
 
   res.type('text/xml');
 
-  if (choice === '2') {
-    res.send(`
-<Response>
-  <Gather input="dtmf" numDigits="5" timeout="10" action="/getZip?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST">
-    <Say>Please re enter your five digit zip code using your keypad.</Say>
-  </Gather>
-  <Say>We did not receive your zip code. Goodbye.</Say>
-</Response>
-`.trim());
-    return;
-  }
-
-  const matchedCounties = getCountyForZip(zip);
-
-  if (matchedCounties.length === 0) {
+  if (!slot) {
     const spokenZip = formatDigitsForSpeech(zip);
     res.send(`
 <Response>
-  <Say>Sorry, we do not currently service zip code ${spokenZip}.</Say>
-  <Say>Please leave your name, number, and message after the tone.</Say>
-  <Record maxLength="60" action="/voicemail?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}" method="POST" />
-  <Say>We did not receive a message. Goodbye.</Say>
+  <Say>Sorry, ${spokenZip} is not in our service area.</Say>
+  <Say>Please call again if you need anything else. Goodbye.</Say>
 </Response>
 `.trim());
     return;
   }
 
-  res.send(`
-<Response>
-  <Say>Thank you. We do service your area.</Say>
-  <Gather input="dtmf" numDigits="10" timeout="10" action="/getPhone?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}" method="POST">
-    <Say>Please enter your ten digit phone number using your keypad.</Say>
-  </Gather>
-  <Say>We did not receive your phone number. Goodbye.</Say>
-</Response>
-`.trim());
-});
-
-// ===== PHONE =====
-app.post('/getPhone', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const machine = req.query.machine || 'Unknown';
-  const issue = req.query.issue || 'Unknown';
-  const zip = req.query.zip || 'Unknown';
-  const phone = (req.body.Digits || '').slice(0, 10);
-  const spokenPhone = formatDigitsForSpeech(phone);
-
-  res.type('text/xml');
-  res.send(`
-<Response>
-  <Gather input="dtmf" numDigits="1" timeout="10" action="/checkPhone?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;phone=${encodeURIComponent(phone)}" method="POST">
-    <Say>You entered phone number ${spokenPhone}. If this is correct, press 1. To re enter your phone number, press 2.</Say>
-  </Gather>
-  <Say>We did not receive a response. Goodbye.</Say>
-</Response>
-`.trim());
-});
-
-app.post('/checkPhone', (req, res) => {
-  const name = req.query.name || 'Unknown';
-  const machine = req.query.machine || 'Unknown';
-  const issue = req.query.issue || 'Unknown';
-  const zip = req.query.zip || 'Unknown';
-  const phone = req.query.phone || '';
-  const choice = req.body.Digits || '';
-
-  res.type('text/xml');
-
-  if (choice === '2') {
+  if (!slot.serviceDay || !slot.serviceWindow) {
     res.send(`
 <Response>
-  <Gather input="dtmf" numDigits="10" timeout="10" action="/getPhone?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}" method="POST">
-    <Say>Please re enter your ten digit phone number using your keypad.</Say>
+  <Say>We could not find an available service window right now.</Say>
+  <Say>We will contact you for the next available opening. Goodbye.</Say>
+</Response>
+`.trim());
+    return;
+  }
+
+  const readableDate = getReadableDate(slot.serviceDate);
+
+  res.send(`
+<Response>
+  <Say>Thanks. ${formatDigitsForSpeech(zip)} is in our service area.</Say>
+  <Pause length="1"/>
+  <Say>The next available service window is ${xmlEscape(readableDate)}, between ${xmlEscape(slot.serviceWindow)}.</Say>
+  <Gather input="speech" action="/confirmAppointmentSlot?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(slot.serviceDate)}&amp;serviceDay=${encodeURIComponent(slot.serviceDay)}&amp;serviceCounty=${encodeURIComponent(slot.serviceCounty)}&amp;serviceWindow=${encodeURIComponent(slot.serviceWindow)}" method="POST" speechTimeout="auto" timeout="5">
+    <Say>Would you like that appointment?</Say>
   </Gather>
-  <Say>We did not receive your phone number. Goodbye.</Say>
+  <Say>I did not hear anything. Goodbye.</Say>
+</Response>
+`.trim());
+});
+
+// ===== STEP 4B: APPOINTMENT SLOT DECISION =====
+app.post('/confirmAppointmentSlot', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const decision = cleanText(req.body.SpeechResult || '');
+
+  const accepted =
+    decision.includes('yes') ||
+    decision.includes('that works') ||
+    decision.includes('works') ||
+    decision.includes('okay') ||
+    decision.includes('ok');
+
+  res.type('text/xml');
+
+  if (!accepted) {
+    res.send(`
+<Response>
+  <Say>No problem. We will contact you with the next available opening. Goodbye.</Say>
 </Response>
 `.trim());
     return;
@@ -754,49 +580,130 @@ app.post('/checkPhone', (req, res) => {
 
   res.send(`
 <Response>
-  <Gather input="dtmf" numDigits="1" timeout="10" action="/getRequestType?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;phone=${encodeURIComponent(phone)}" method="POST">
-    <Say>Press 1 to leave a message for follow up. Press 2 to request an appointment.</Say>
+  <Gather input="speech" action="/getNameForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}" method="POST" speechTimeout="auto" timeout="5">
+    <Say>Great. Can I get your first and last name, please?</Say>
   </Gather>
-  <Say>We did not receive a response. Goodbye.</Say>
+  <Say>I did not hear anything. Goodbye.</Say>
 </Response>
 `.trim());
 });
 
-// ===== MESSAGE OR APPOINTMENT =====
-app.post('/getRequestType', async (req, res) => {
-  const name = req.query.name || 'Unknown';
+// ===== STEP 5A: APPOINTMENT NAME =====
+app.post('/getNameForAppointment', (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const name = titleCase(req.body.SpeechResult);
+
+  res.type('text/xml');
+  res.send(`
+<Response>
+  <Gather input="dtmf" numDigits="10" action="/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}" method="POST" timeout="10">
+    <Say>Thanks, ${xmlEscape(name)}. What is the best phone number to reach you at?</Say>
+  </Gather>
+  <Say>We did not receive your phone number. Goodbye.</Say>
+</Response>
+`.trim());
+});
+
+// ===== STEP 5B: APPOINTMENT PHONE =====
+app.post('/getPhoneForAppointment', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const name = req.query.name || 'Unknown';
+  const phone = (req.body.Digits || '').slice(0, 10);
+
+  res.type('text/xml');
+  res.send(`
+<Response>
+  <Gather input="speech" action="/getAddressForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="auto" timeout="6">
+    <Say>Thanks. What is the service address?</Say>
+  </Gather>
+  <Say>I did not hear anything. Goodbye.</Say>
+</Response>
+`.trim());
+});
+
+// ===== STEP 5C: APPOINTMENT ADDRESS =====
+app.post('/getAddressForAppointment', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
-  const choice = req.body.Digits || '';
+  const address = titleCase(req.body.SpeechResult);
+  const readableDate = getReadableDate(serviceDate);
 
-  const requestType = choice === '2' ? 'Appointment Request' : 'Message';
+  res.type('text/xml');
+  res.send(`
+<Response>
+  <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="7">
+    <Say>Let me confirm everything.</Say>
+    <Pause length="1"/>
+    <Say>I have your name as ${xmlEscape(name)}, phone number ${xmlEscape(formatDigitsForSpeech(phone))}, zip code ${xmlEscape(formatDigitsForSpeech(zip))}, service address ${xmlEscape(address)}, and your ${xmlEscape(machine)} has ${xmlEscape(issue)}.</Say>
+    <Pause length="1"/>
+    <Say>The available appointment is ${xmlEscape(readableDate)} between ${xmlEscape(serviceWindow)}.</Say>
+    <Pause length="1"/>
+    <Say>Does that all sound correct?</Say>
+  </Gather>
+  <Say>I did not hear anything. Goodbye.</Say>
+</Response>
+`.trim());
+});
 
-  let serviceDate = '';
-  let serviceDay = '';
-  let serviceCounty = '';
-  let serviceWindow = '';
+// ===== STEP 5D: FINAL APPOINTMENT CONFIRM =====
+app.post('/finalConfirmAppointment', async (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  let serviceWindow = req.query.serviceWindow || '';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = req.query.address || '';
+  const decision = cleanText(req.body.SpeechResult || '');
 
-  if (requestType === 'Appointment Request') {
-    const routing = await findNextAvailableSlot(zip);
+  const accepted =
+    decision.includes('yes') ||
+    decision.includes('correct') ||
+    decision.includes('sounds correct') ||
+    decision.includes('that is correct');
 
-    if (routing) {
-      serviceDate = routing.serviceDate;
-      serviceDay = routing.serviceDay;
-      serviceCounty = routing.serviceCounty;
-      serviceWindow = routing.serviceWindow;
-    }
+  res.type('text/xml');
+
+  if (!accepted) {
+    res.send(`
+<Response>
+  <Say>No problem. Please call back so we can correct the information. Goodbye.</Say>
+</Response>
+`.trim());
+    return;
   }
 
   const job = {
     id: generateJobId(),
-    requestType,
+    requestType: 'Appointment Request',
     name,
     machine,
     problem: issue,
     zip,
     phone,
+    address,
     serviceDate,
     serviceDay,
     serviceCounty,
@@ -806,38 +713,122 @@ app.post('/getRequestType', async (req, res) => {
 
   saveJob(job);
 
-  if (
-    requestType === 'Appointment Request' &&
-    serviceDate &&
-    (serviceDay === 'Friday' || serviceDay === 'Saturday')
-  ) {
+  if (serviceDate && (serviceDay === 'Friday' || serviceDay === 'Saturday')) {
     await rebalanceFridaySaturdayJobs(serviceDate);
-
     const updatedJobs = loadJobs();
     const saved = updatedJobs.find((j) => j.id === job.id);
     if (saved) {
       serviceWindow = saved.serviceWindow || serviceWindow;
-      serviceCounty = saved.serviceCounty || serviceCounty;
     }
   }
 
-  if (requestType === 'Appointment Request') {
-    res.type('text/xml');
+  const readableDate = getReadableDate(serviceDate);
+
+  res.send(`
+<Response>
+  <Say>Great. You are all set.</Say>
+  <Pause length="1"/>
+  <Say>I have booked your appointment for ${xmlEscape(readableDate)} between ${xmlEscape(serviceWindow)}.</Say>
+  <Pause length="1"/>
+  <Say>We look forward to helping with your ${xmlEscape(machine)}. Have a wonderful day.</Say>
+</Response>
+`.trim());
+});
+
+// ===== MESSAGE PATH =====
+app.post('/getNameForMessage', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const name = titleCase(req.body.SpeechResult);
+
+  res.type('text/xml');
+  res.send(`
+<Response>
+  <Gather input="dtmf" numDigits="10" action="/getPhoneForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}" method="POST" timeout="10">
+    <Say>Thanks, ${xmlEscape(name)}. What is the best phone number to reach you at?</Say>
+  </Gather>
+  <Say>We did not receive your phone number. Goodbye.</Say>
+</Response>
+`.trim());
+});
+
+app.post('/getPhoneForMessage', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const name = req.query.name || 'Unknown';
+  const phone = (req.body.Digits || '').slice(0, 10);
+
+  res.type('text/xml');
+  res.send(`
+<Response>
+  <Gather input="speech" action="/getAddressForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="auto" timeout="6">
+    <Say>Thanks. What is the service address?</Say>
+  </Gather>
+  <Say>I did not hear anything. Goodbye.</Say>
+</Response>
+`.trim());
+});
+
+app.post('/getAddressForMessage', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = titleCase(req.body.SpeechResult);
+
+  res.type('text/xml');
+  res.send(`
+<Response>
+  <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="7">
+    <Say>Let me confirm everything.</Say>
+    <Pause length="1"/>
+    <Say>I have your name as ${xmlEscape(name)}, phone number ${xmlEscape(formatDigitsForSpeech(phone))}, service address ${xmlEscape(address)}, and your ${xmlEscape(machine)} has ${xmlEscape(issue)}.</Say>
+    <Pause length="1"/>
+    <Say>Does that all sound correct?</Say>
+  </Gather>
+  <Say>I did not hear anything. Goodbye.</Say>
+</Response>
+`.trim());
+});
+
+app.post('/finalConfirmMessage', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = req.query.address || '';
+  const decision = cleanText(req.body.SpeechResult || '');
+
+  const accepted =
+    decision.includes('yes') ||
+    decision.includes('correct') ||
+    decision.includes('sounds correct') ||
+    decision.includes('that is correct');
+
+  res.type('text/xml');
+
+  if (!accepted) {
     res.send(`
 <Response>
-  <Say>Thank you. Your appointment request has been received.</Say>
-  <Pause length="1"/>
-  <Say>Your next available service day is ${xmlEscape(serviceDay || 'to be confirmed')}.</Say>
-  <Pause length="1"/>
-  <Say>Your service window is ${xmlEscape(serviceWindow || 'We will contact you to schedule your service window.')}.</Say>
-  <Pause length="1"/>
-  <Say>We will contact you if anything changes. Goodbye.</Say>
+  <Say>No problem. Please call back so we can correct the information. Goodbye.</Say>
 </Response>
 `.trim());
     return;
   }
 
-  res.type('text/xml');
+  const job = {
+    id: generateJobId(),
+    requestType: 'Message',
+    name,
+    machine,
+    problem: issue,
+    phone,
+    address,
+    time: new Date().toLocaleString()
+  };
+
+  saveJob(job);
+
   res.send(`
 <Response>
   <Say>Thank you. Your message has been received. We will contact you shortly. Goodbye.</Say>
@@ -935,8 +926,9 @@ app.get('/jobs', (req, res) => {
     <div class="line">Name: ${job.name || ''}</div>
     <div class="line">Machine: ${job.machine || ''}</div>
     <div class="line">Problem: ${job.problem || ''}</div>
-    <div class="line">ZIP: ${job.zip || ''}</div>
-    <div class="line">Phone: ${job.phone || ''}</div>
+    ${job.zip ? `<div class="line">ZIP: ${job.zip}</div>` : ''}
+    ${job.phone ? `<div class="line">Phone: ${job.phone}</div>` : ''}
+    ${job.address ? `<div class="line">Address: ${job.address}</div>` : ''}
     ${job.serviceDate ? `<div class="line">Service Date: ${job.serviceDate}</div>` : ''}
     ${job.serviceDay ? `<div class="line">Service Day: ${job.serviceDay}</div>` : ''}
     ${job.serviceCounty ? `<div class="line">County: ${job.serviceCounty}</div>` : ''}
