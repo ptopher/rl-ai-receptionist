@@ -616,33 +616,80 @@ app.post('/voicemail', (req, res) => {
 app.get('/jobs', (req, res) => {
   const jobs = loadJobs();
 
-  let html = '<h1>Jobs</h1>';
+  let html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="refresh" content="10">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RL Jobs</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 16px;
+      background: #ffffff;
+      color: #111111;
+    }
+    h1 {
+      margin-bottom: 8px;
+    }
+    .refresh-note {
+      color: #666666;
+      font-size: 14px;
+      margin-bottom: 16px;
+    }
+    .job {
+      border: 1px solid #cccccc;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .job strong {
+      font-size: 18px;
+    }
+    .line {
+      margin-top: 4px;
+    }
+    a {
+      color: #0b57d0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Jobs</h1>
+  <div class="refresh-note">Auto-refreshing every 10 seconds</div>
+`;
 
   if (jobs.length === 0) {
     html += '<p>No jobs yet</p>';
+    html += '</body></html>';
     res.send(html);
     return;
   }
 
-  html += '<ul>';
-
   jobs.forEach((job) => {
-    html += `<li>
-      <strong>${job.time || ''}</strong><br>
-      Type: ${job.requestType || ''}<br>
-      Name: ${job.name || ''}<br>
-      Machine: ${job.machine || ''}<br>
-      Problem: ${job.problem || ''}<br>
-      ZIP: ${job.zip || ''}<br>
-      Phone: ${job.phone || ''}<br>
-      ${job.serviceDay ? `Service Day: ${job.serviceDay}<br>` : ''}
-      ${job.serviceCounty ? `County: ${job.serviceCounty}<br>` : ''}
-      ${job.serviceWindow ? `Window: ${job.serviceWindow}<br>` : ''}
-      ${job.recording ? `Recording: <a href="${job.recording}" target="_blank">Listen</a><br>` : ''}
-    </li><br>`;
+    html += `
+  <div class="job">
+    <strong>${job.time || ''}</strong>
+    <div class="line">Type: ${job.requestType || ''}</div>
+    <div class="line">Name: ${job.name || ''}</div>
+    <div class="line">Machine: ${job.machine || ''}</div>
+    <div class="line">Problem: ${job.problem || ''}</div>
+    <div class="line">ZIP: ${job.zip || ''}</div>
+    <div class="line">Phone: ${job.phone || ''}</div>
+    ${job.serviceDay ? `<div class="line">Service Day: ${job.serviceDay}</div>` : ''}
+    ${job.serviceCounty ? `<div class="line">County: ${job.serviceCounty}</div>` : ''}
+    ${job.serviceWindow ? `<div class="line">Window: ${job.serviceWindow}</div>` : ''}
+    ${job.recording ? `<div class="line">Recording: <a href="${job.recording}" target="_blank">Listen</a></div>` : ''}
+  </div>
+`;
   });
 
-  html += '</ul>';
+  html += `
+</body>
+</html>
+`;
 
   res.send(html);
 });
