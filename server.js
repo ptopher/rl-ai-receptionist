@@ -7,6 +7,30 @@ app.use(express.json());
 
 const JOBS_FILE = 'jobs.json';
 
+// ===== HOME / ROUTING SETTINGS =====
+const routingConfig = {
+  homeZip: '20724',
+
+  // Update these on Sunday whenever needed
+  mondayThroughThursdayPlan: {
+    Monday: "Prince George's",
+    Tuesday: "Howard",
+    Wednesday: "Anne Arundel",
+    Thursday: "Baltimore County"
+  },
+
+  fridayAllowedCounties: ['Anne Arundel', 'Howard'],
+  saturdayAllowedCounties: ['Howard', "Prince George's"],
+
+  mondayThursdayWindow: '10:00 to 10:30',
+  fridaySaturdayMorningWindow: '10:00 to 12:00',
+  fridaySaturdayAfternoonWindow: '1:00 to 4:00',
+
+  mondayThursdayMax: 1,
+  fridaySaturdayMorningMax: 2,
+  fridaySaturdayAfternoonMax: 3
+};
+
 // ===== COUNTY ZIP MAPS =====
 const countyZips = {
   "Prince George's": [
@@ -30,22 +54,7 @@ const countyZips = {
   ]
 };
 
-// ===== WEEKLY COUNTY PLAN =====
-const weeklyCountyPlan = {
-  Monday: "Prince George's",
-  Tuesday: "Howard",
-  Wednesday: "Anne Arundel",
-  Thursday: "Baltimore County",
-  Friday: {
-    morning: "Prince George's",
-    afternoon: "Anne Arundel"
-  },
-  Saturday: {
-    morning: "Howard",
-    afternoon: "Baltimore County"
-  }
-};
-
+// ===== MACHINE DETECTION =====
 function cleanText(text) {
   return (text || '')
     .toLowerCase()
@@ -66,7 +75,7 @@ function titleCase(text) {
 function detectMachine(input) {
   const cleaned = cleanText(input);
 
-  // ===== RIDING MOWER FIRST =====
+  // Riding mower first
   if (
     cleaned.includes('riding') ||
     cleaned.includes('tractor') ||
@@ -77,7 +86,6 @@ function detectMachine(input) {
     return 'Riding mower';
   }
 
-  // ===== PUSH MOWER / STANDARD MOWER =====
   if (
     cleaned.includes('lawn mower') ||
     cleaned === 'mower' ||
@@ -86,12 +94,10 @@ function detectMachine(input) {
     return 'Lawnmower';
   }
 
-  // ===== GENERATOR =====
   if (cleaned.includes('generator') || cleaned === 'gen') {
     return 'Generator';
   }
 
-  // ===== PRESSURE WASHER =====
   if (
     cleaned.includes('pressure washer') ||
     cleaned.includes('power washer')
@@ -99,7 +105,6 @@ function detectMachine(input) {
     return 'Pressure washer';
   }
 
-  // ===== SNOWBLOWER =====
   if (
     cleaned.includes('snow blower') ||
     cleaned.includes('snowblower') ||
@@ -111,6 +116,7 @@ function detectMachine(input) {
   return null;
 }
 
+// ===== GENERAL HELPERS =====
 function formatDigitsForSpeech(digits) {
   return (digits || '').split('').join(' ');
 }
@@ -136,10 +142,14 @@ function loadJobs() {
   }
 }
 
+function saveAllJobs(jobs) {
+  fs.writeFileSync(JOBS_FILE, JSON.stringify(jobs, null, 2));
+}
+
 function saveJob(job) {
   const jobs = loadJobs();
   jobs.push(job);
-  fs.writeFileSync(JOBS_FILE, JSON.stringify(jobs, null, 2));
+  saveAllJobs(jobs);
 }
 
 function getCountyForZip(zip) {
@@ -154,83 +164,315 @@ function getCountyForZip(zip) {
   return matches;
 }
 
-function getNextServiceDayName() {
-  const now = new Date();
-  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-  for (let offset = 1; offset <= 7; offset += 1) {
-    const future = new Date(now);
-    future.setDate(now.getDate() + offset);
-    const dayName = dayNames[future.getDay()];
-
-    if (dayName !== 'Sunday') {
-      return dayName;
-    }
-  }
-
-  return 'Monday';
+function getEasternNow() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
 }
 
-function getAppointmentWindow(zip) {
-  const dayName = getNextServiceDayName();
+function formatEasternDateKey(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+
+  const year = parts.find((p) => p.type === 'year')?.value || '0000';
+  const month = parts.find((p) => p.type === 'month')?.value || '00';
+  const day = parts.find((p) => p.type === 'day')?.value || '00';
+
+  return `${year}-${month}-${day}`;
+}
+
+function getDayNameInEastern(date) {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'long'
+  }).format(date);
+}
+
+function generateJobId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// ===== ZIP COORDINATES + DISTANCE =====
+const zipCoordCache = {};
+
+async function getZipCoordinates(zip) {
+  if (!zip) return null;
+  if (zipCoordCache[zip]) return zipCoordCache[zip];
+
+  try {
+    const response = await fetch(`https://api.zippopotam.us/us/${zip}`);
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    const place = data?.places?.[0];
+
+    if (!place) return null;
+
+    const coords = {
+      lat: parseFloat(place.latitude),
+      lon: parseFloat(place.longitude)
+    };
+
+    if (Number.isNaN(coords.lat) || Number.isNaN(coords.lon)) {
+      return null;
+    }
+
+    zipCoordCache[zip] = coords;
+    return coords;
+  } catch {
+    return null;
+  }
+}
+
+function haversineMiles(lat1, lon1, lat2, lon2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = 3958.8; // miles
+
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+async function getDistanceFromHomeMiles(zip) {
+  const homeCoords = await getZipCoordinates(routingConfig.homeZip);
+  const jobCoords = await getZipCoordinates(zip);
+
+  if (!homeCoords || !jobCoords) {
+    return 999999;
+  }
+
+  return haversineMiles(homeCoords.lat, homeCoords.lon, jobCoords.lat, jobCoords.lon);
+}
+
+// ===== ROUTING + LIMITS =====
+function getAppointmentJobsForDate(jobs, serviceDate) {
+  return jobs.filter(
+    (job) =>
+      job.requestType === 'Appointment Request' &&
+      job.serviceDate === serviceDate
+  );
+}
+
+async function rebalanceFridaySaturdayJobs(serviceDate) {
+  const jobs = loadJobs();
+  const dayJobs = jobs.filter(
+    (job) =>
+      job.requestType === 'Appointment Request' &&
+      job.serviceDate === serviceDate
+  );
+
+  if (dayJobs.length === 0) {
+    return;
+  }
+
+  const enriched = [];
+  for (const job of dayJobs) {
+    const distance = await getDistanceFromHomeMiles(job.zip);
+    enriched.push({ job, distance });
+  }
+
+  enriched.sort((a, b) => a.distance - b.distance);
+
+  for (let i = 0; i < enriched.length; i += 1) {
+    const current = enriched[i].job;
+    if (i < routingConfig.fridaySaturdayMorningMax) {
+      current.serviceWindow = routingConfig.fridaySaturdayMorningWindow;
+    } else if (
+      i <
+      routingConfig.fridaySaturdayMorningMax +
+        routingConfig.fridaySaturdayAfternoonMax
+    ) {
+      current.serviceWindow = routingConfig.fridaySaturdayAfternoonWindow;
+    } else {
+      current.serviceWindow = 'We will contact you to schedule your service window.';
+    }
+  }
+
+  saveAllJobs(jobs);
+}
+
+async function findNextAvailableSlot(zip) {
   const matchingCounties = getCountyForZip(zip);
-  const plan = weeklyCountyPlan[dayName];
 
-  if (!plan) {
-    return {
-      dayName,
-      county: matchingCounties[0] || 'Unknown',
-      window: 'We will contact you to schedule your service window.',
-      matched: false
-    };
+  if (matchingCounties.length === 0) {
+    return null;
   }
 
-  if (typeof plan === 'string') {
-    const matched = matchingCounties.includes(plan);
+  const existingJobs = loadJobs();
+  const now = getEasternNow();
 
-    return {
-      dayName,
-      county: plan,
-      window: matched ? '10:00 to 10:30' : 'We will contact you to schedule your service window.',
-      matched
-    };
-  }
+  for (let offset = 1; offset <= 30; offset += 1) {
+    const future = new Date(now);
+    future.setDate(now.getDate() + offset);
 
-  if (typeof plan === 'object') {
-    if (matchingCounties.includes(plan.morning)) {
-      return {
-        dayName,
-        county: plan.morning,
-        window: '10:00 to 12:00',
-        matched: true
-      };
+    const serviceDate = formatEasternDateKey(future);
+    const dayName = getDayNameInEastern(future);
+
+    if (dayName === 'Sunday') {
+      continue;
     }
 
-    if (matchingCounties.includes(plan.afternoon)) {
-      return {
-        dayName,
-        county: plan.afternoon,
-        window: '1:00 to 4:00',
-        matched: true
-      };
+    const dayJobs = getAppointmentJobsForDate(existingJobs, serviceDate);
+
+    // Monday through Thursday
+    if (
+      dayName === 'Monday' ||
+      dayName === 'Tuesday' ||
+      dayName === 'Wednesday' ||
+      dayName === 'Thursday'
+    ) {
+      const targetCounty = routingConfig.mondayThroughThursdayPlan[dayName];
+      if (!matchingCounties.includes(targetCounty)) {
+        continue;
+      }
+
+      if (dayJobs.length < routingConfig.mondayThursdayMax) {
+        return {
+          serviceDate,
+          serviceDay: dayName,
+          serviceCounty: targetCounty,
+          serviceWindow: routingConfig.mondayThursdayWindow
+        };
+      }
+
+      continue;
     }
 
-    return {
-      dayName,
-      county: matchingCounties[0] || 'Unknown',
-      window: 'We will contact you to schedule your service window.',
-      matched: false
-    };
+    // Friday
+    if (dayName === 'Friday') {
+      const allowed = routingConfig.fridayAllowedCounties;
+      const matchedAllowed = matchingCounties.find((county) =>
+        allowed.includes(county)
+      );
+
+      if (!matchedAllowed) {
+        continue;
+      }
+
+      if (
+        dayJobs.length <
+        routingConfig.fridaySaturdayMorningMax +
+          routingConfig.fridaySaturdayAfternoonMax
+      ) {
+        const tempCandidate = {
+          id: '__temp__',
+          zip
+        };
+
+        const compareList = [];
+
+        for (const job of dayJobs) {
+          compareList.push({
+            id: job.id,
+            zip: job.zip
+          });
+        }
+
+        compareList.push(tempCandidate);
+
+        const enriched = [];
+        for (const item of compareList) {
+          const distance = await getDistanceFromHomeMiles(item.zip);
+          enriched.push({ ...item, distance });
+        }
+
+        enriched.sort((a, b) => a.distance - b.distance);
+        const tempIndex = enriched.findIndex((item) => item.id === '__temp__');
+
+        const serviceWindow =
+          tempIndex < routingConfig.fridaySaturdayMorningMax
+            ? routingConfig.fridaySaturdayMorningWindow
+            : routingConfig.fridaySaturdayAfternoonWindow;
+
+        return {
+          serviceDate,
+          serviceDay: dayName,
+          serviceCounty: matchedAllowed,
+          serviceWindow
+        };
+      }
+
+      continue;
+    }
+
+    // Saturday
+    if (dayName === 'Saturday') {
+      const allowed = routingConfig.saturdayAllowedCounties;
+      const matchedAllowed = matchingCounties.find((county) =>
+        allowed.includes(county)
+      );
+
+      if (!matchedAllowed) {
+        continue;
+      }
+
+      if (
+        dayJobs.length <
+        routingConfig.fridaySaturdayMorningMax +
+          routingConfig.fridaySaturdayAfternoonMax
+      ) {
+        const tempCandidate = {
+          id: '__temp__',
+          zip
+        };
+
+        const compareList = [];
+
+        for (const job of dayJobs) {
+          compareList.push({
+            id: job.id,
+            zip: job.zip
+          });
+        }
+
+        compareList.push(tempCandidate);
+
+        const enriched = [];
+        for (const item of compareList) {
+          const distance = await getDistanceFromHomeMiles(item.zip);
+          enriched.push({ ...item, distance });
+        }
+
+        enriched.sort((a, b) => a.distance - b.distance);
+        const tempIndex = enriched.findIndex((item) => item.id === '__temp__');
+
+        const serviceWindow =
+          tempIndex < routingConfig.fridaySaturdayMorningMax
+            ? routingConfig.fridaySaturdayMorningWindow
+            : routingConfig.fridaySaturdayAfternoonWindow;
+
+        return {
+          serviceDate,
+          serviceDay: dayName,
+          serviceCounty: matchedAllowed,
+          serviceWindow
+        };
+      }
+    }
   }
 
   return {
-    dayName,
-    county: matchingCounties[0] || 'Unknown',
-    window: 'We will contact you to schedule your service window.',
-    matched: false
+    serviceDate: '',
+    serviceDay: '',
+    serviceCounty: matchingCounties[0] || 'Unknown',
+    serviceWindow: 'We will contact you to schedule your service window.'
   };
 }
 
+// ===== TWIML START =====
 function buildVoiceTwiml() {
   return `
 <Response>
@@ -321,7 +563,6 @@ app.post('/getMachine', (req, res) => {
 
 app.post('/checkMachine', (req, res) => {
   const name = req.query.name || 'Unknown';
-  const spokenMachine = req.query.spoken || 'Unknown';
   const detectedMachine = req.query.detected || '';
   const choice = req.body.Digits || '';
 
@@ -527,7 +768,7 @@ app.post('/checkPhone', (req, res) => {
 });
 
 // ===== MESSAGE OR APPOINTMENT =====
-app.post('/getRequestType', (req, res) => {
+app.post('/getRequestType', async (req, res) => {
   const name = req.query.name || 'Unknown';
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
@@ -537,24 +778,31 @@ app.post('/getRequestType', (req, res) => {
 
   const requestType = choice === '2' ? 'Appointment Request' : 'Message';
 
+  let serviceDate = '';
   let serviceDay = '';
   let serviceCounty = '';
   let serviceWindow = '';
 
   if (requestType === 'Appointment Request') {
-    const scheduling = getAppointmentWindow(zip);
-    serviceDay = scheduling.dayName;
-    serviceCounty = scheduling.county;
-    serviceWindow = scheduling.window;
+    const routing = await findNextAvailableSlot(zip);
+
+    if (routing) {
+      serviceDate = routing.serviceDate;
+      serviceDay = routing.serviceDay;
+      serviceCounty = routing.serviceCounty;
+      serviceWindow = routing.serviceWindow;
+    }
   }
 
   const job = {
+    id: generateJobId(),
     requestType,
     name,
     machine,
     problem: issue,
     zip,
     phone,
+    serviceDate,
     serviceDay,
     serviceCounty,
     serviceWindow,
@@ -563,15 +811,31 @@ app.post('/getRequestType', (req, res) => {
 
   saveJob(job);
 
+  // Rebalance Fri/Sat after save so closest jobs always come first
+  if (
+    requestType === 'Appointment Request' &&
+    serviceDate &&
+    (serviceDay === 'Friday' || serviceDay === 'Saturday')
+  ) {
+    await rebalanceFridaySaturdayJobs(serviceDate);
+
+    const updatedJobs = loadJobs();
+    const saved = updatedJobs.find((j) => j.id === job.id);
+    if (saved) {
+      serviceWindow = saved.serviceWindow || serviceWindow;
+      serviceCounty = saved.serviceCounty || serviceCounty;
+    }
+  }
+
   if (requestType === 'Appointment Request') {
     res.type('text/xml');
     res.send(`
 <Response>
   <Say>Thank you. Your appointment request has been received.</Say>
   <Pause length="1"/>
-  <Say>Your next available service day is ${xmlEscape(serviceDay)}.</Say>
+  <Say>Your next available service day is ${xmlEscape(serviceDay || 'to be confirmed')}.</Say>
   <Pause length="1"/>
-  <Say>Your service window is ${xmlEscape(serviceWindow)}.</Say>
+  <Say>Your service window is ${xmlEscape(serviceWindow || 'We will contact you to schedule your service window.')}.</Say>
   <Pause length="1"/>
   <Say>We will contact you if anything changes. Goodbye.</Say>
 </Response>
@@ -592,6 +856,7 @@ app.post('/voicemail', (req, res) => {
   const matchedCounties = getCountyForZip(req.query.zip || '');
 
   const job = {
+    id: generateJobId(),
     requestType: 'Out Of Area Voicemail',
     name: req.query.name || 'Unknown',
     machine: req.query.machine || 'Unknown',
@@ -678,6 +943,7 @@ app.get('/jobs', (req, res) => {
     <div class="line">Problem: ${job.problem || ''}</div>
     <div class="line">ZIP: ${job.zip || ''}</div>
     <div class="line">Phone: ${job.phone || ''}</div>
+    ${job.serviceDate ? `<div class="line">Service Date: ${job.serviceDate}</div>` : ''}
     ${job.serviceDay ? `<div class="line">Service Day: ${job.serviceDay}</div>` : ''}
     ${job.serviceCounty ? `<div class="line">County: ${job.serviceCounty}</div>` : ''}
     ${job.serviceWindow ? `<div class="line">Window: ${job.serviceWindow}</div>` : ''}
