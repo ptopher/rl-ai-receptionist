@@ -231,7 +231,9 @@ app.post('/checkMachine', (req, res) => {
   res.send(`
 <Response>
   <Gather input="speech" action="/getIssue?name=${encodeURIComponent(name)}&amp;machine=${encodeURIComponent(detectedMachine)}" method="POST" speechTimeout="auto" timeout="6">
-    <Say>Got it. You said ${xmlEscape(detectedMachine)}. What problem are you having?</Say>
+    <Say>Got it. You said ${xmlEscape(detectedMachine)}.</Say>
+    <Pause length="1"/>
+    <Say>Please briefly describe the problem, like won't start, leaking, or making noise.</Say>
   </Gather>
   <Say>I did not hear anything. Goodbye.</Say>
 </Response>
