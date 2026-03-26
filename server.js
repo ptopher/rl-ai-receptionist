@@ -31,7 +31,6 @@ const countyZips = {
 };
 
 // ===== WEEKLY COUNTY PLAN =====
-// Update these later whenever you want.
 const weeklyCountyPlan = {
   Monday: "Prince George's",
   Tuesday: "Howard",
@@ -58,7 +57,10 @@ const machineMap = {
   ],
   'Riding mower': [
     'riding mower',
+    'ridingmower',
     'riding lawn mower',
+    'ride mower',
+    'lawn tractor',
     'rider'
   ],
   Generator: [
@@ -97,10 +99,17 @@ function titleCase(text) {
 
 function detectMachine(input) {
   const cleaned = cleanText(input);
+  const compressed = cleaned.replace(/\s+/g, '');
 
   for (const machineName of Object.keys(machineMap)) {
     for (const phrase of machineMap[machineName]) {
-      if (cleaned.includes(phrase)) {
+      const phraseClean = cleanText(phrase);
+      const phraseCompressed = phraseClean.replace(/\s+/g, '');
+
+      if (
+        cleaned.includes(phraseClean) ||
+        compressed.includes(phraseCompressed)
+      ) {
         return machineName;
       }
     }
