@@ -113,7 +113,9 @@ function buildVoiceTwiml() {
   return `
 <Response>
   <Gather input="speech" action="/getName" method="POST" speechTimeout="auto" timeout="5">
-    <Say>Hello, this is R L Small Engines. Please say your name.</Say>
+    <Say>Thank you for calling R L Small Engines. I’m going to ask a few quick questions to schedule your service.</Say>
+    <Pause length="1"/>
+    <Say>Please say your name.</Say>
   </Gather>
   <Say>I did not hear anything. Goodbye.</Say>
 </Response>
@@ -487,29 +489,4 @@ app.get('/jobs', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('Server running on port ' + PORT);
-});
-app.get('/test-firebase', async (req, res) => {
-  try {
-    const admin = require('firebase-admin');
-
-    if (!admin.apps.length) {
-      const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
-
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-      });
-    }
-
-    const db = admin.firestore();
-
-    await db.collection('test').add({
-      message: 'Firebase connected',
-      time: new Date(),
-    });
-
-    res.send('Firebase WORKING');
-  } catch (err) {
-    console.log(err);
-    res.send('Firebase FAILED');
-  }
 });
