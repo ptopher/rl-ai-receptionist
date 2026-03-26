@@ -5,16 +5,47 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-const serviceAreaZips = ['20724', '21054', '21113'];
 const JOBS_FILE = 'jobs.json';
 
-const allowedMachines = [
-  'Lawnmower',
-  'Riding mower',
-  'Generator',
-  'Pressure washer',
-  'Snowblower'
-];
+// ===== COUNTY ZIP MAPS =====
+const countyZips = {
+  "Prince George's": [
+    '20707', '20705', '20708', '20783', '20742', '20771', '20769', '20706',
+    '20737', '20782', '20781', '20784', '20720', '20715', '20721', '20716',
+    '20785', '20743', '20747', '20746', '20774', '20748', '20745', '20735',
+    '20772', '20623', '20744', '20607', '20613'
+  ],
+  "Howard": [
+    '20701', '21029', '21044', '21045', '21046', '21075', '20759',
+    '21076', '20777', '20794', '20723', '21042', '21043'
+  ],
+  "Anne Arundel": [
+    '21401', '21402', '21403', '21012', '21114', '21032', '21035',
+    '21037', '21054', '21060', '21061', '21076', '21077', '20776',
+    '20794', '20724', '21090', '21108', '21113', '21122', '21140',
+    '21144', '21146'
+  ],
+  "Baltimore County": [
+    '21228', '21043', '21227', '21208', '21133', '21136', '21244', '21163'
+  ]
+};
+
+// ===== WEEKLY COUNTY PLAN =====
+// Update these later whenever you want.
+const weeklyCountyPlan = {
+  Monday: "Prince George's",
+  Tuesday: "Howard",
+  Wednesday: "Anne Arundel",
+  Thursday: "Baltimore County",
+  Friday: {
+    morning: "Prince George's",
+    afternoon: "Anne Arundel"
+  },
+  Saturday: {
+    morning: "Howard",
+    afternoon: "Baltimore County"
+  }
+};
 
 const machineMap = {
   Lawnmower: [
@@ -107,6 +138,97 @@ function saveJob(job) {
   const jobs = loadJobs();
   jobs.push(job);
   fs.writeFileSync(JOBS_FILE, JSON.stringify(jobs, null, 2));
+}
+
+function getCountyForZip(zip) {
+  const matches = [];
+
+  for (const countyName of Object.keys(countyZips)) {
+    if (countyZips[countyName].includes(zip)) {
+      matches.push(countyName);
+    }
+  }
+
+  return matches;
+}
+
+function getNextServiceDayName() {
+  const now = new Date();
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  for (let offset = 1; offset <= 7; offset += 1) {
+    const future = new Date(now);
+    future.setDate(now.getDate() + offset);
+    const dayName = dayNames[future.getDay()];
+
+    if (dayName !== 'Sunday') {
+      return dayName;
+    }
+  }
+
+  return 'Monday';
+}
+
+function getAppointmentWindow(zip) {
+  const dayName = getNextServiceDayName();
+  const matchingCounties = getCountyForZip(zip);
+  const plan = weeklyCountyPlan[dayName];
+
+  if (!plan) {
+    return {
+      dayName,
+      county: matchingCounties[0] || 'Unknown',
+      window: 'We will contact you to schedule your service window.',
+      matched: false
+    };
+  }
+
+  if (typeof plan === 'string') {
+    const matched = matchingCounties.includes(plan);
+
+    return {
+      dayName,
+      county: plan,
+      window: matched
+        ? '10:00 to 10:30'
+        : 'We will contact you to schedule your service window.',
+      matched
+    };
+  }
+
+  if (typeof plan === 'object') {
+    if (matchingCounties.includes(plan.morning)) {
+      return {
+        dayName,
+        county: plan.morning,
+        window: '10:00 to 12:00',
+        matched: true
+      };
+    }
+
+    if (matchingCounties.includes(plan.afternoon)) {
+      return {
+        dayName,
+        county: plan.afternoon,
+        window: '1:00 to 4:00',
+        matched: true
+      };
+    }
+
+    return {
+      dayName,
+      county: matchingCounties[0] || 'Unknown',
+      window: 'We will contact you to schedule your service window.',
+      matched: false
+    };
+  }
+
+  return {
+    dayName,
+    county: matchingCounties[0] || 'Unknown',
+    window: 'We will contact you to schedule your service window.',
+    matched: false
+  };
 }
 
 function buildVoiceTwiml() {
@@ -327,7 +449,9 @@ app.post('/checkZip', (req, res) => {
     return;
   }
 
-  if (!serviceAreaZips.includes(zip)) {
+  const matchedCounties = getCountyForZip(zip);
+
+  if (matchedCounties.length === 0) {
     const spokenZip = formatDigitsForSpeech(zip);
     res.send(`
 <Response>
@@ -414,6 +538,17 @@ app.post('/getRequestType', (req, res) => {
 
   const requestType = choice === '2' ? 'Appointment Request' : 'Message';
 
+  let serviceDay = '';
+  let serviceCounty = '';
+  let serviceWindow = '';
+
+  if (requestType === 'Appointment Request') {
+    const scheduling = getAppointmentWindow(zip);
+    serviceDay = scheduling.dayName;
+    serviceCounty = scheduling.county;
+    serviceWindow = scheduling.window;
+  }
+
   const job = {
     requestType,
     name,
@@ -421,27 +556,49 @@ app.post('/getRequestType', (req, res) => {
     problem: issue,
     zip,
     phone,
+    serviceDay,
+    serviceCounty,
+    serviceWindow,
     time: new Date().toLocaleString()
   };
 
   saveJob(job);
 
+  if (requestType === 'Appointment Request') {
+    res.type('text/xml');
+    res.send(`
+<Response>
+  <Say>Thank you. Your appointment request has been received.</Say>
+  <Pause length="1"/>
+  <Say>Your next available service day is ${xmlEscape(serviceDay)}.</Say>
+  <Pause length="1"/>
+  <Say>Your service window is ${xmlEscape(serviceWindow)}.</Say>
+  <Pause length="1"/>
+  <Say>We will contact you if anything changes. Goodbye.</Say>
+</Response>
+`.trim());
+    return;
+  }
+
   res.type('text/xml');
   res.send(`
 <Response>
-  <Say>Thank you. Your ${requestType.toLowerCase()} has been received. We will contact you shortly. Goodbye.</Say>
+  <Say>Thank you. Your message has been received. We will contact you shortly. Goodbye.</Say>
 </Response>
 `.trim());
 });
 
 // ===== OUT OF AREA VOICEMAIL =====
 app.post('/voicemail', (req, res) => {
+  const matchedCounties = getCountyForZip(req.query.zip || '');
+
   const job = {
     requestType: 'Out Of Area Voicemail',
     name: req.query.name || 'Unknown',
     machine: req.query.machine || 'Unknown',
     problem: req.query.issue || 'Unknown',
     zip: req.query.zip || 'Unknown',
+    serviceCounty: matchedCounties.join(', '),
     recording: req.body.RecordingUrl || '',
     time: new Date().toLocaleString()
   };
@@ -479,6 +636,9 @@ app.get('/jobs', (req, res) => {
       Problem: ${job.problem || ''}<br>
       ZIP: ${job.zip || ''}<br>
       Phone: ${job.phone || ''}<br>
+      ${job.serviceDay ? `Service Day: ${job.serviceDay}<br>` : ''}
+      ${job.serviceCounty ? `County: ${job.serviceCounty}<br>` : ''}
+      ${job.serviceWindow ? `Window: ${job.serviceWindow}<br>` : ''}
       ${job.recording ? `Recording: <a href="${job.recording}" target="_blank">Listen</a><br>` : ''}
     </li><br>`;
   });
