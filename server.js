@@ -53,6 +53,62 @@ const countyZips = {
   ]
 };
 
+// ===== LOCAL CORRECTION LAYER =====
+const exactPhraseCorrections = [
+  ['bevern', 'severn'],
+  ['seven maryland', 'severn maryland'],
+  ['severn marylin', 'severn maryland'],
+  ['odenton marylin', 'odenton maryland'],
+  ['glen bernie', 'glen burnie'],
+  ['glen berny', 'glen burnie'],
+  ['glenn burnie', 'glen burnie'],
+  ['bowy', 'bowie'],
+  ['booie', 'bowie'],
+  ['bui', 'bowie'],
+  ['lanhamm', 'lanham'],
+  ['lanem', 'lanham'],
+  ['croftonn', 'crofton'],
+  ['millersvile', 'millersville'],
+  ['pasadenaa', 'pasadena'],
+  ['gambrillss', 'gambrills'],
+  ['laurel marylin', 'laurel maryland'],
+  ['bel air road', 'belair road'],
+  ['belair rd', 'belair road'],
+  ['ain arundel', 'anne arundel'],
+  ['anne arundele', 'anne arundel'],
+  ['lawn tractor', 'riding mower'],
+  ['ride on mower', 'riding mower'],
+  ['rider mower', 'riding mower'],
+  ['push mower', 'lawnmower'],
+  ['pressure washing machine', 'pressure washer'],
+  ['snow blower', 'snowblower']
+];
+
+const wordCorrections = {
+  bevern: 'severn',
+  sevenn: 'severn',
+  severnn: 'severn',
+  glenn: 'glen',
+  bernie: 'burnie',
+  berny: 'burnie',
+  bowy: 'bowie',
+  booie: 'bowie',
+  lanem: 'lanham',
+  lanhamm: 'lanham',
+  croftonn: 'crofton',
+  millersvile: 'millersville',
+  pasadenaa: 'pasadena',
+  gambrillss: 'gambrills',
+  arundele: 'arundel',
+  marylin: 'maryland'
+};
+
+const localStreetWords = new Set([
+  'street', 'st', 'road', 'rd', 'avenue', 'ave', 'boulevard', 'blvd',
+  'drive', 'dr', 'court', 'ct', 'lane', 'ln', 'place', 'pl', 'circle', 'cir',
+  'way', 'terrace', 'ter', 'parkway', 'pkwy'
+]);
+
 // ===== HELPERS =====
 function cleanText(text) {
   return (text || '')
@@ -109,8 +165,100 @@ function digitsToWords(value) {
     .join(', ');
 }
 
+function replaceAllWholePhrase(text, from, to) {
+  const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return text.replace(new RegExp(`\\b${escaped}\\b`, 'gi'), to);
+}
+
+function applyLocalCorrections(text) {
+  let corrected = String(text || '');
+
+  for (const [from, to] of exactPhraseCorrections) {
+    corrected = replaceAllWholePhrase(corrected, from, to);
+  }
+
+  const parts = corrected.split(/(\s+)/);
+  corrected = parts
+    .map((part) => {
+      const lower = part.toLowerCase();
+      return wordCorrections[lower] || part;
+    })
+    .join('');
+
+  corrected = corrected.replace(/\s+/g, ' ').trim();
+  return corrected;
+}
+
+function normalizeStreetSuffixWord(word) {
+  const lower = word.toLowerCase();
+
+  const streetMap = {
+    st: 'St',
+    street: 'Street',
+    rd: 'Rd',
+    road: 'Road',
+    ave: 'Ave',
+    avenue: 'Avenue',
+    blvd: 'Blvd',
+    boulevard: 'Boulevard',
+    dr: 'Dr',
+    drive: 'Drive',
+    ct: 'Ct',
+    court: 'Court',
+    ln: 'Ln',
+    lane: 'Lane',
+    pl: 'Pl',
+    place: 'Place',
+    cir: 'Cir',
+    circle: 'Circle',
+    ter: 'Ter',
+    terrace: 'Terrace',
+    pkwy: 'Pkwy',
+    parkway: 'Parkway'
+  };
+
+  return streetMap[lower] || null;
+}
+
+function normalizeAddressText(address) {
+  const corrected = applyLocalCorrections(address);
+  const tokens = corrected.split(/\s+/);
+  const normalized = tokens.map((token) => {
+    if (/^\d[\d-]*$/.test(token)) {
+      return token;
+    }
+
+    const suffix = normalizeStreetSuffixWord(token);
+    if (suffix) {
+      return suffix;
+    }
+
+    return token
+      .split('-')
+      .map((piece) => {
+        if (!piece) return piece;
+        return piece.charAt(0).toUpperCase() + piece.slice(1).toLowerCase();
+      })
+      .join('-');
+  });
+
+  return normalized.join(' ').trim();
+}
+
 function formatAddressForSpeech(address) {
   return String(address || '').replace(/\d[\d-]*/g, (match) => digitsToWords(match));
+}
+
+function normalizeNameText(name) {
+  const corrected = applyLocalCorrections(name);
+  return corrected
+    .split(/\s+/)
+    .map((word) => {
+      if (!word) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(' ')
+    .trim();
 }
 
 function loadJobs() {
@@ -225,10 +373,7 @@ function detectFutureOffsetDays(text) {
     return 7;
   }
 
-  if (
-    cleaned.includes('later this week') ||
-    cleaned.includes('later')
-  ) {
+  if (cleaned.includes('later this week') || cleaned.includes('later')) {
     return 4;
   }
 
@@ -243,11 +388,7 @@ function detectOptionSelection(req) {
 
   const cleaned = cleanText(req.body.SpeechResult || '');
 
-  if (
-    cleaned.includes('option 1') ||
-    cleaned === '1' ||
-    cleaned.includes('one')
-  ) {
+  if (cleaned.includes('option 1') || cleaned === '1' || cleaned.includes('one')) {
     return 1;
   }
 
@@ -330,11 +471,12 @@ async function getDistanceFromHomeMiles(zip) {
 
 // ===== MACHINE DETECTION =====
 function detectMachine(input) {
-  const cleaned = cleanText(input);
+  const cleaned = cleanText(applyLocalCorrections(input));
 
   if (
     cleaned.includes('riding') ||
     cleaned.includes('tractor') ||
+    cleaned.includes('riding mower') ||
     cleaned.includes('lawn tractor') ||
     cleaned.includes('ride mower') ||
     cleaned.includes('rider')
@@ -345,7 +487,8 @@ function detectMachine(input) {
   if (
     cleaned.includes('lawn mower') ||
     cleaned === 'mower' ||
-    cleaned.includes('push mower')
+    cleaned.includes('push mower') ||
+    cleaned.includes('lawnmower')
   ) {
     return 'Lawnmower';
   }
@@ -422,7 +565,7 @@ function extractPhoneFromRequest(req) {
 function extractAddressFromSpeech(req) {
   const raw = String(req.body.SpeechResult || '').trim();
   if (!raw) return '';
-  return raw.replace(/\s+/g, ' ').trim();
+  return normalizeAddressText(raw);
 }
 
 // ===== AVAILABILITY / ROUTING =====
@@ -641,7 +784,7 @@ app.post('/getHelpRequest', (req, res) => {
 // ===== STEP 2: ISSUE =====
 app.post('/getIssue', (req, res) => {
   const machine = req.query.machine || 'Unknown';
-  const issue = titleCase(req.body.SpeechResult);
+  const issue = normalizeAddressText(req.body.SpeechResult || 'Unknown');
 
   res.type('text/xml');
   res.send(`
@@ -821,7 +964,7 @@ app.post('/getNameForAppointment', (req, res) => {
   const serviceDay = req.query.serviceDay || '';
   const serviceCounty = req.query.serviceCounty || '';
   const serviceWindow = req.query.serviceWindow || '';
-  const name = titleCase(req.body.SpeechResult);
+  const name = normalizeNameText(req.body.SpeechResult);
 
   res.type('text/xml');
   res.send(`
@@ -995,7 +1138,7 @@ app.post('/finalConfirmAppointment', async (req, res) => {
 app.post('/getNameForMessage', (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
-  const name = titleCase(req.body.SpeechResult);
+  const name = normalizeNameText(req.body.SpeechResult);
 
   res.type('text/xml');
   res.send(`
