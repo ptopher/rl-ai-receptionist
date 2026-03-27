@@ -192,6 +192,86 @@ function getAppointmentJobsForDate(jobs, serviceDate) {
   );
 }
 
+function buildOptionSpeech(slots) {
+  let speech = 'Here are the next available appointments. ';
+  slots.forEach((slot, index) => {
+    speech += `Option ${index + 1}, ${slot.readableDate}, between ${slot.serviceWindow}. `;
+  });
+  return speech;
+}
+
+function detectFutureOffsetDays(text) {
+  const cleaned = cleanText(text);
+
+  if (
+    cleaned.includes('two weeks') ||
+    cleaned.includes('2 weeks') ||
+    cleaned.includes('2 week') ||
+    cleaned.includes('two week')
+  ) {
+    return 14;
+  }
+
+  if (
+    cleaned.includes('three weeks') ||
+    cleaned.includes('3 weeks') ||
+    cleaned.includes('3 week') ||
+    cleaned.includes('three week')
+  ) {
+    return 21;
+  }
+
+  if (cleaned.includes('next week') || cleaned.includes('week out') || cleaned === 'week') {
+    return 7;
+  }
+
+  if (
+    cleaned.includes('later this week') ||
+    cleaned.includes('later')
+  ) {
+    return 4;
+  }
+
+  return null;
+}
+
+function detectOptionSelection(req) {
+  const digit = String(req.body.Digits || '').trim();
+  if (digit === '1' || digit === '2' || digit === '3') {
+    return parseInt(digit, 10);
+  }
+
+  const cleaned = cleanText(req.body.SpeechResult || '');
+
+  if (
+    cleaned.includes('option 1') ||
+    cleaned === '1' ||
+    cleaned.includes('one')
+  ) {
+    return 1;
+  }
+
+  if (
+    cleaned.includes('option 2') ||
+    cleaned === '2' ||
+    cleaned.includes('two') ||
+    cleaned.includes('second')
+  ) {
+    return 2;
+  }
+
+  if (
+    cleaned.includes('option 3') ||
+    cleaned === '3' ||
+    cleaned.includes('three') ||
+    cleaned.includes('third')
+  ) {
+    return 3;
+  }
+
+  return null;
+}
+
 // ===== ZIP COORDINATES + DISTANCE =====
 const zipCoordCache = {};
 
@@ -383,96 +463,122 @@ async function rebalanceFridaySaturdayJobs(serviceDate) {
   saveAllJobs(jobs);
 }
 
-async function findNextAvailableSlot(zip) {
+async function getSlotForDate(zip, serviceDate, dayName) {
   const matchingCounties = getCountyForZip(zip);
   if (matchingCounties.length === 0) return null;
 
   const existingJobs = loadJobs();
+  const dayJobs = getAppointmentJobsForDate(existingJobs, serviceDate);
+
+  if (
+    dayName === 'Monday' ||
+    dayName === 'Tuesday' ||
+    dayName === 'Wednesday' ||
+    dayName === 'Thursday'
+  ) {
+    const targetCounty = routingConfig.mondayThroughThursdayPlan[dayName];
+    if (!matchingCounties.includes(targetCounty)) {
+      return null;
+    }
+
+    if (dayJobs.length < routingConfig.mondayThursdayMax) {
+      return {
+        serviceDate,
+        serviceDay: dayName,
+        serviceCounty: targetCounty,
+        serviceWindow: routingConfig.mondayThursdayWindow
+      };
+    }
+
+    return null;
+  }
+
+  if (dayName === 'Friday' || dayName === 'Saturday') {
+    const allowed =
+      dayName === 'Friday'
+        ? routingConfig.fridayAllowedCounties
+        : routingConfig.saturdayAllowedCounties;
+
+    const matchedAllowed = matchingCounties.find((county) =>
+      allowed.includes(county)
+    );
+
+    if (!matchedAllowed) {
+      return null;
+    }
+
+    if (
+      dayJobs.length <
+      routingConfig.fridaySaturdayMorningMax +
+        routingConfig.fridaySaturdayAfternoonMax
+    ) {
+      const tempCandidate = { id: '__temp__', zip };
+      const compareList = dayJobs.map((job) => ({ id: job.id, zip: job.zip }));
+      compareList.push(tempCandidate);
+
+      const enriched = [];
+      for (const item of compareList) {
+        const distance = await getDistanceFromHomeMiles(item.zip);
+        enriched.push({ ...item, distance });
+      }
+
+      enriched.sort((a, b) => a.distance - b.distance);
+      const tempIndex = enriched.findIndex((item) => item.id === '__temp__');
+
+      const serviceWindow =
+        tempIndex < routingConfig.fridaySaturdayMorningMax
+          ? routingConfig.fridaySaturdayMorningWindow
+          : routingConfig.fridaySaturdayAfternoonWindow;
+
+      return {
+        serviceDate,
+        serviceDay: dayName,
+        serviceCounty: matchedAllowed,
+        serviceWindow
+      };
+    }
+
+    return null;
+  }
+
+  return null;
+}
+
+async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
+  const matchingCounties = getCountyForZip(zip);
+  if (matchingCounties.length === 0) {
+    return [];
+  }
+
+  const results = [];
   const now = getEasternNow();
 
-  for (let offset = 1; offset <= 30; offset += 1) {
+  for (let offset = startOffsetDays; offset <= 30; offset += 1) {
+    if (results.length >= maxSlots) {
+      break;
+    }
+
     const future = new Date(now);
     future.setDate(now.getDate() + offset);
 
     const serviceDate = formatEasternDateKey(future);
     const dayName = getDayNameInEastern(future);
 
-    if (dayName === 'Sunday') continue;
-
-    const dayJobs = getAppointmentJobsForDate(existingJobs, serviceDate);
-
-    if (
-      dayName === 'Monday' ||
-      dayName === 'Tuesday' ||
-      dayName === 'Wednesday' ||
-      dayName === 'Thursday'
-    ) {
-      const targetCounty = routingConfig.mondayThroughThursdayPlan[dayName];
-      if (!matchingCounties.includes(targetCounty)) continue;
-
-      if (dayJobs.length < routingConfig.mondayThursdayMax) {
-        return {
-          serviceDate,
-          serviceDay: dayName,
-          serviceCounty: targetCounty,
-          serviceWindow: routingConfig.mondayThursdayWindow
-        };
-      }
-
+    if (dayName === 'Sunday') {
       continue;
     }
 
-    if (dayName === 'Friday' || dayName === 'Saturday') {
-      const allowed =
-        dayName === 'Friday'
-          ? routingConfig.fridayAllowedCounties
-          : routingConfig.saturdayAllowedCounties;
+    const slot = await getSlotForDate(zip, serviceDate, dayName);
 
-      const matchedAllowed = matchingCounties.find((county) =>
-        allowed.includes(county)
-      );
-
-      if (!matchedAllowed) continue;
-
-      if (
-        dayJobs.length <
-        routingConfig.fridaySaturdayMorningMax +
-          routingConfig.fridaySaturdayAfternoonMax
-      ) {
-        const tempCandidate = { id: '__temp__', zip };
-        const compareList = dayJobs.map((job) => ({ id: job.id, zip: job.zip }));
-        compareList.push(tempCandidate);
-
-        const enriched = [];
-        for (const item of compareList) {
-          const distance = await getDistanceFromHomeMiles(item.zip);
-          enriched.push({ ...item, distance });
-        }
-
-        enriched.sort((a, b) => a.distance - b.distance);
-        const tempIndex = enriched.findIndex((item) => item.id === '__temp__');
-
-        const serviceWindow =
-          tempIndex < routingConfig.fridaySaturdayMorningMax
-            ? routingConfig.fridaySaturdayMorningWindow
-            : routingConfig.fridaySaturdayAfternoonWindow;
-
-        return {
-          serviceDate,
-          serviceDay: dayName,
-          serviceCounty: matchedAllowed,
-          serviceWindow
-        };
-      }
+    if (slot) {
+      results.push({
+        ...slot,
+        readableDate: getReadableDate(slot.serviceDate)
+      });
     }
   }
 
-  return {
-    serviceDate: '',
-    serviceDay: '',
-    serviceCounty: matchingCounties[0] || 'Unknown',
-    serviceWindow: 'We will contact you to schedule your service window.'
-  };
+  return results;
 }
 
 // ===== CALL FLOW START =====
@@ -590,69 +696,105 @@ app.post('/getZipForAppointment', async (req, res) => {
   const issue = req.query.issue || 'Unknown';
   const zip = (req.body.Digits || '').slice(0, 5);
 
-  const slot = await findNextAvailableSlot(zip);
+  const slots = await findAvailableSlots(zip, 1, 3);
 
   res.type('text/xml');
 
-  if (!slot) {
+  if (!slots.length) {
     res.send(`
 <Response>
-  ${say(`Sorry, ${digitsToWords(zip)} is not in our service area.`)}
+  ${say(`Sorry, ${digitsToWords(zip)} is not in our service area or there are no available appointments right now.`)}
   ${say("Please call again if you need anything else. Goodbye.")}
 </Response>
 `.trim());
     return;
   }
 
-  if (!slot.serviceDay || !slot.serviceWindow) {
-    res.send(`
-<Response>
-  ${say("We could not find an available service window right now.")}
-  ${say("We will contact you for the next available opening. Goodbye.")}
-</Response>
-`.trim());
-    return;
-  }
-
-  const readableDate = getReadableDate(slot.serviceDate);
+  const optionsSpeech = buildOptionSpeech(slots);
 
   res.send(`
 <Response>
   ${say(`Thanks. ${digitsToWords(zip)} is in our service area.`)}
   ${pause(1)}
-  ${say(`The next available service window is ${readableDate}, between ${slot.serviceWindow}.`)}
-  <Gather input="speech" action="/confirmAppointmentSlot?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(slot.serviceDate)}&amp;serviceDay=${encodeURIComponent(slot.serviceDay)}&amp;serviceCounty=${encodeURIComponent(slot.serviceCounty)}&amp;serviceWindow=${encodeURIComponent(slot.serviceWindow)}" method="POST" speechTimeout="auto" timeout="5">
-    ${say("Would you like that appointment?")}
+  ${say(optionsSpeech)}
+  <Gather input="speech dtmf" numDigits="1" action="/selectAppointmentOption?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;startOffset=1" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Press or say option 1, 2, or 3. You can also say next week or two weeks out.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
 });
 
-// ===== STEP 4B: APPOINTMENT SLOT DECISION =====
-app.post('/confirmAppointmentSlot', (req, res) => {
+// ===== STEP 4B: APPOINTMENT OPTION SELECTION =====
+app.post('/selectAppointmentOption', async (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
-  const serviceDate = req.query.serviceDate || '';
-  const serviceDay = req.query.serviceDay || '';
-  const serviceCounty = req.query.serviceCounty || '';
-  const serviceWindow = req.query.serviceWindow || '';
-  const decision = cleanText(req.body.SpeechResult || '');
+  const currentStartOffset = parseInt(req.query.startOffset || '1', 10);
 
-  const accepted =
-    decision.includes('yes') ||
-    decision.includes('that works') ||
-    decision.includes('works') ||
-    decision.includes('okay') ||
-    decision.includes('ok');
+  const speechText = req.body.SpeechResult || '';
+  const futureOffset = detectFutureOffsetDays(speechText);
+  const selectedOption = detectOptionSelection(req);
 
   res.type('text/xml');
 
-  if (!accepted) {
+  if (futureOffset !== null) {
+    const futureSlots = await findAvailableSlots(zip, futureOffset, 3);
+
+    if (!futureSlots.length) {
+      res.send(`
+<Response>
+  ${say("I could not find appointments in that time frame.")}
+  <Gather input="speech dtmf" numDigits="1" action="/selectAppointmentOption?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;startOffset=${encodeURIComponent(currentStartOffset)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Please say or press option 1, 2, or 3.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+      return;
+    }
+
+    const futureSpeech = buildOptionSpeech(futureSlots);
+
     res.send(`
 <Response>
-  ${say("No problem. We will contact you with the next available opening. Goodbye.")}
+  ${say(futureSpeech)}
+  <Gather input="speech dtmf" numDigits="1" action="/selectAppointmentOption?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;startOffset=${encodeURIComponent(futureOffset)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Press or say option 1, 2, or 3.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  if (!selectedOption) {
+    const currentSlots = await findAvailableSlots(zip, currentStartOffset, 3);
+    const currentSpeech = currentSlots.length ? buildOptionSpeech(currentSlots) : '';
+
+    res.send(`
+<Response>
+  ${currentSpeech ? say(currentSpeech) : ''}
+  <Gather input="speech dtmf" numDigits="1" action="/selectAppointmentOption?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;startOffset=${encodeURIComponent(currentStartOffset)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("I did not understand. Please say or press option 1, 2, or 3.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  const currentSlots = await findAvailableSlots(zip, currentStartOffset, 3);
+  const chosenSlot = currentSlots[selectedOption - 1];
+
+  if (!chosenSlot) {
+    res.send(`
+<Response>
+  ${say("That option is not available.")}
+  <Gather input="speech dtmf" numDigits="1" action="/selectAppointmentOption?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;startOffset=${encodeURIComponent(currentStartOffset)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Please say or press option 1, 2, or 3.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
     return;
@@ -660,9 +802,9 @@ app.post('/confirmAppointmentSlot', (req, res) => {
 
   res.send(`
 <Response>
-  ${say("Great.")}
+  ${say(`Great. You selected ${chosenSlot.readableDate}, between ${chosenSlot.serviceWindow}.`)}
   ${pause(1)}
-  <Gather input="speech" action="/getNameForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}" method="POST" speechTimeout="4" timeout="10">
+  <Gather input="speech" action="/getNameForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(chosenSlot.serviceDate)}&amp;serviceDay=${encodeURIComponent(chosenSlot.serviceDay)}&amp;serviceCounty=${encodeURIComponent(chosenSlot.serviceCounty)}&amp;serviceWindow=${encodeURIComponent(chosenSlot.serviceWindow)}" method="POST" speechTimeout="4" timeout="10">
     ${say("Can I get your first and last name, please?")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
