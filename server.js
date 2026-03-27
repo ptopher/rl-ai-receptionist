@@ -110,16 +110,7 @@ function digitsToWords(value) {
 }
 
 function formatAddressForSpeech(address) {
-  const parts = String(address || '').split(/(\s+)/);
-
-  return parts
-    .map((part) => {
-      if (/^\d[\d-]*$/.test(part)) {
-        return digitsToWords(part);
-      }
-      return part;
-    })
-    .join('');
+  return String(address || '').replace(/\d[\d-]*/g, (match) => digitsToWords(match));
 }
 
 function loadJobs() {
