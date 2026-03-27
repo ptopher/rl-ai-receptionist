@@ -103,12 +103,6 @@ const wordCorrections = {
   marylin: 'maryland'
 };
 
-const localStreetWords = new Set([
-  'street', 'st', 'road', 'rd', 'avenue', 'ave', 'boulevard', 'blvd',
-  'drive', 'dr', 'court', 'ct', 'lane', 'ln', 'place', 'pl', 'circle', 'cir',
-  'way', 'terrace', 'ter', 'parkway', 'pkwy'
-]);
-
 // ===== HELPERS =====
 function cleanText(text) {
   return (text || '')
@@ -163,6 +157,10 @@ function digitsToWords(value) {
     .split('')
     .map((d) => map[d] || d)
     .join(', ');
+}
+
+function formatAddressForSpeech(address) {
+  return String(address || '').replace(/\d[\d-]*/g, (match) => digitsToWords(match));
 }
 
 function replaceAllWholePhrase(text, from, to) {
@@ -243,10 +241,6 @@ function normalizeAddressText(address) {
   });
 
   return normalized.join(' ').trim();
-}
-
-function formatAddressForSpeech(address) {
-  return String(address || '').replace(/\d[\d-]*/g, (match) => digitsToWords(match));
 }
 
 function normalizeNameText(name) {
@@ -411,6 +405,19 @@ function detectOptionSelection(req) {
   }
 
   return null;
+}
+
+function detectCorrectionField(text) {
+  const cleaned = cleanText(text);
+
+  if (cleaned.includes('phone')) return 'phone';
+  if (cleaned.includes('address') || cleaned.includes('street')) return 'address';
+  if (cleaned.includes('name')) return 'name';
+  if (cleaned.includes('machine') || cleaned.includes('mower') || cleaned.includes('generator') || cleaned.includes('washer') || cleaned.includes('snowblower')) return 'machine';
+  if (cleaned.includes('problem') || cleaned.includes('issue')) return 'issue';
+  if (cleaned.includes('appointment') || cleaned.includes('time') || cleaned.includes('option') || cleaned.includes('date') || cleaned.includes('schedule')) return 'appointment';
+
+  return '';
 }
 
 // ===== ZIP COORDINATES + DISTANCE =====
@@ -1063,6 +1070,314 @@ app.post('/getAddressForAppointment', (req, res) => {
 `.trim());
 });
 
+// ===== APPOINTMENT CORRECTION CHOICE =====
+app.post('/appointmentCorrectionChoice', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = req.query.address || '';
+  const correctionField = detectCorrectionField(req.body.SpeechResult || '');
+
+  res.type('text/xml');
+
+  if (!correctionField) {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/appointmentCorrectionChoice?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Please tell me what needs to be corrected. You can say name, phone number, address, machine, issue, or appointment.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  if (correctionField === 'name') {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/correctAppointmentName?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="4" timeout="10">
+    ${say("Please say the correct first and last name.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  if (correctionField === 'phone') {
+    res.send(`
+<Response>
+  <Gather input="speech dtmf" numDigits="10" action="/correctAppointmentPhone?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Please say or enter the correct phone number.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  if (correctionField === 'address') {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/correctAppointmentAddress?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="5" timeout="15">
+    ${say("Please say the correct service address.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  if (correctionField === 'machine') {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/correctAppointmentMachine?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Please say the correct machine.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  if (correctionField === 'issue') {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/correctAppointmentIssue?machine=${encodeURIComponent(machine)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Please say the correct issue.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  if (correctionField === 'appointment') {
+    res.send(`
+<Response>
+  ${say("No problem. Let's choose a different appointment.")}
+  <Gather input="speech dtmf" numDigits="1" action="/selectAppointmentOption?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;startOffset=1&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Press or say option 1, 2, or 3. You can also say next week or two weeks out.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+  }
+});
+
+// ===== APPOINTMENT FIELD CORRECTION ROUTES =====
+app.post('/correctAppointmentName', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const phone = req.query.phone || '';
+  const address = req.query.address || '';
+  const name = normalizeNameText(req.body.SpeechResult);
+
+  const readableDate = getReadableDate(serviceDate);
+  const spokenAddress = formatAddressForSpeech(address);
+
+  res.type('text/xml');
+  res.send(`
+<Response>
+  ${say("Got it. I updated the name.")}
+  <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Let me confirm everything again.")}
+    ${pause(1)}
+    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+    ${pause(1)}
+    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
+    ${pause(1)}
+    ${say("Does that all sound correct?")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
+app.post('/correctAppointmentPhone', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const name = req.query.name || 'Unknown';
+  const address = req.query.address || '';
+  const phone = extractPhoneFromRequest(req);
+
+  res.type('text/xml');
+
+  if (!phone || phone.length < 10) {
+    res.send(`
+<Response>
+  <Gather input="speech dtmf" numDigits="10" action="/correctAppointmentPhone?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("I did not get the correct phone number. Please say it again or enter it using your keypad.")}
+  </Gather>
+  ${say("We did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  const readableDate = getReadableDate(serviceDate);
+  const spokenAddress = formatAddressForSpeech(address);
+
+  res.send(`
+<Response>
+  ${say("Got it. I updated the phone number.")}
+  <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Let me confirm everything again.")}
+    ${pause(1)}
+    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+    ${pause(1)}
+    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
+    ${pause(1)}
+    ${say("Does that all sound correct?")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
+app.post('/correctAppointmentAddress', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = extractAddressFromSpeech(req);
+
+  res.type('text/xml');
+
+  if (!address || address.length < 5) {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/correctAppointmentAddress?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="5" timeout="15">
+    ${say("I did not get the correct address. Please say the full service address again.")}
+  </Gather>
+  ${say("We did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  const readableDate = getReadableDate(serviceDate);
+  const spokenAddress = formatAddressForSpeech(address);
+
+  res.send(`
+<Response>
+  ${say("Got it. I updated the address.")}
+  <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Let me confirm everything again.")}
+    ${pause(1)}
+    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+    ${pause(1)}
+    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
+    ${pause(1)}
+    ${say("Does that all sound correct?")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
+app.post('/correctAppointmentMachine', (req, res) => {
+  const currentMachine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = req.query.address || '';
+
+  const detectedMachine = detectMachine(req.body.SpeechResult || '');
+
+  res.type('text/xml');
+
+  if (!detectedMachine) {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/correctAppointmentMachine?machine=${encodeURIComponent(currentMachine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("I did not get the correct machine. Please say the machine again.")}
+  </Gather>
+  ${say("We did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  const readableDate = getReadableDate(serviceDate);
+  const spokenAddress = formatAddressForSpeech(address);
+
+  res.send(`
+<Response>
+  ${say("Got it. I updated the machine.")}
+  <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(detectedMachine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Let me confirm everything again.")}
+    ${pause(1)}
+    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${detectedMachine} has ${issue}.`)}
+    ${pause(1)}
+    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
+    ${pause(1)}
+    ${say("Does that all sound correct?")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
+app.post('/correctAppointmentIssue', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = req.query.address || '';
+  const issue = normalizeAddressText(req.body.SpeechResult || 'Unknown');
+
+  const readableDate = getReadableDate(serviceDate);
+  const spokenAddress = formatAddressForSpeech(address);
+
+  res.type('text/xml');
+  res.send(`
+<Response>
+  ${say("Got it. I updated the issue.")}
+  <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Let me confirm everything again.")}
+    ${pause(1)}
+    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+    ${pause(1)}
+    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
+    ${pause(1)}
+    ${say("Does that all sound correct?")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
 // ===== STEP 5D: FINAL APPOINTMENT CONFIRM =====
 app.post('/finalConfirmAppointment', async (req, res) => {
   const machine = req.query.machine || 'Unknown';
@@ -1088,7 +1403,10 @@ app.post('/finalConfirmAppointment', async (req, res) => {
   if (!accepted) {
     res.send(`
 <Response>
-  ${say("No problem. Please call back so we can correct the information. Goodbye.")}
+  <Gather input="speech" action="/appointmentCorrectionChoice?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Okay. What needs to be corrected? You can say name, phone number, address, machine, issue, or appointment.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
     return;
@@ -1222,6 +1540,252 @@ app.post('/getAddressForMessage', (req, res) => {
 `.trim());
 });
 
+// ===== MESSAGE CORRECTION CHOICE =====
+app.post('/messageCorrectionChoice', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = req.query.address || '';
+  const correctionField = detectCorrectionField(req.body.SpeechResult || '');
+
+  res.type('text/xml');
+
+  if (!correctionField) {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/messageCorrectionChoice?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Please tell me what needs to be corrected. You can say name, phone number, address, machine, or issue.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  if (correctionField === 'name') {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/correctMessageName?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="4" timeout="10">
+    ${say("Please say the correct first and last name.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  if (correctionField === 'phone') {
+    res.send(`
+<Response>
+  <Gather input="speech dtmf" numDigits="10" action="/correctMessagePhone?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Please say or enter the correct phone number.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  if (correctionField === 'address') {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/correctMessageAddress?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="5" timeout="15">
+    ${say("Please say the correct service address.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  if (correctionField === 'machine') {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/correctMessageMachine?issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Please say the correct machine.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  if (correctionField === 'issue') {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/correctMessageIssue?machine=${encodeURIComponent(machine)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Please say the correct issue.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+  }
+});
+
+// ===== MESSAGE FIELD CORRECTION ROUTES =====
+app.post('/correctMessageName', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = req.query.address || '';
+  const name = normalizeNameText(req.body.SpeechResult);
+  const spokenAddress = formatAddressForSpeech(address);
+
+  res.type('text/xml');
+  res.send(`
+<Response>
+  ${say("Got it. I updated the name.")}
+  <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Let me confirm everything again.")}
+    ${pause(1)}
+    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+    ${pause(1)}
+    ${say("Does that all sound correct?")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
+app.post('/correctMessagePhone', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const name = req.query.name || 'Unknown';
+  const address = req.query.address || '';
+  const phone = extractPhoneFromRequest(req);
+
+  res.type('text/xml');
+
+  if (!phone || phone.length < 10) {
+    res.send(`
+<Response>
+  <Gather input="speech dtmf" numDigits="10" action="/correctMessagePhone?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("I did not get the correct phone number. Please say it again or enter it using your keypad.")}
+  </Gather>
+  ${say("We did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  const spokenAddress = formatAddressForSpeech(address);
+
+  res.send(`
+<Response>
+  ${say("Got it. I updated the phone number.")}
+  <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Let me confirm everything again.")}
+    ${pause(1)}
+    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+    ${pause(1)}
+    ${say("Does that all sound correct?")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
+app.post('/correctMessageAddress', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = extractAddressFromSpeech(req);
+
+  res.type('text/xml');
+
+  if (!address || address.length < 5) {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/correctMessageAddress?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="5" timeout="15">
+    ${say("I did not get the correct address. Please say it again.")}
+  </Gather>
+  ${say("We did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  const spokenAddress = formatAddressForSpeech(address);
+
+  res.send(`
+<Response>
+  ${say("Got it. I updated the address.")}
+  <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Let me confirm everything again.")}
+    ${pause(1)}
+    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+    ${pause(1)}
+    ${say("Does that all sound correct?")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
+app.post('/correctMessageMachine', (req, res) => {
+  const issue = req.query.issue || 'Unknown';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = req.query.address || '';
+  const machine = detectMachine(req.body.SpeechResult || '');
+  const spokenAddress = formatAddressForSpeech(address);
+
+  res.type('text/xml');
+
+  if (!machine) {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/correctMessageMachine?issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("I did not get the correct machine. Please say it again.")}
+  </Gather>
+  ${say("We did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  res.send(`
+<Response>
+  ${say("Got it. I updated the machine.")}
+  <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Let me confirm everything again.")}
+    ${pause(1)}
+    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+    ${pause(1)}
+    ${say("Does that all sound correct?")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
+app.post('/correctMessageIssue', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = req.query.address || '';
+  const issue = normalizeAddressText(req.body.SpeechResult || 'Unknown');
+  const spokenAddress = formatAddressForSpeech(address);
+
+  res.type('text/xml');
+  res.send(`
+<Response>
+  ${say("Got it. I updated the issue.")}
+  <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Let me confirm everything again.")}
+    ${pause(1)}
+    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+    ${pause(1)}
+    ${say("Does that all sound correct?")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
+// ===== FINAL MESSAGE CONFIRM =====
 app.post('/finalConfirmMessage', (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
@@ -1241,7 +1805,10 @@ app.post('/finalConfirmMessage', (req, res) => {
   if (!accepted) {
     res.send(`
 <Response>
-  ${say("No problem. Please call back so we can correct the information. Goodbye.")}
+  <Gather input="speech" action="/messageCorrectionChoice?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Okay. What needs to be corrected? You can say name, phone number, address, machine, or issue.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
     return;
