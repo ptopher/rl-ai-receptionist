@@ -106,7 +106,7 @@ function digitsToWords(value) {
     .replace(/\D/g, '')
     .split('')
     .map((d) => map[d] || d)
-    .join(' ');
+    .join(', ');
 }
 
 function loadJobs() {
@@ -593,9 +593,7 @@ app.post('/getZipForAppointment', async (req, res) => {
   if (!slot) {
     res.send(`
 <Response>
-  ${say("Sorry,")}
-  ${say(digitsToWords(zip))}
-  ${say("is not in our service area.")}
+  ${say(`Sorry, ${digitsToWords(zip)} is not in our service area.`)}
   ${say("Please call again if you need anything else. Goodbye.")}
 </Response>
 `.trim());
@@ -616,9 +614,7 @@ app.post('/getZipForAppointment', async (req, res) => {
 
   res.send(`
 <Response>
-  ${say("Thanks.")}
-  ${say(digitsToWords(zip))}
-  ${say("is in our service area.")}
+  ${say(`Thanks. ${digitsToWords(zip)} is in our service area.`)}
   ${pause(1)}
   ${say(`The next available service window is ${readableDate}, between ${slot.serviceWindow}.`)}
   <Gather input="speech" action="/confirmAppointmentSlot?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(slot.serviceDate)}&amp;serviceDay=${encodeURIComponent(slot.serviceDay)}&amp;serviceCounty=${encodeURIComponent(slot.serviceCounty)}&amp;serviceWindow=${encodeURIComponent(slot.serviceWindow)}" method="POST" speechTimeout="auto" timeout="5">
