@@ -384,11 +384,11 @@ function buildAppointmentConfirmationTwiml({
   ${pause(1)}
   ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
   ${pause(1)}
-  <Gather input="speech" action="${actionUrl}" method="POST" speechTimeout="auto" timeout="10">
+  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
     ${say("Does that all sound correct? Please say yes or no.")}
   </Gather>
   ${say("I did not catch that.")}
-  <Gather input="speech" action="${actionUrl}" method="POST" speechTimeout="auto" timeout="10">
+  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
     ${say("Please say yes if everything is correct, or say no if something needs to be fixed.")}
   </Gather>
   ${say("I still did not hear anything. Goodbye.")}
@@ -417,11 +417,11 @@ function buildMessageConfirmationTwiml({
   ${pause(1)}
   ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
   ${pause(1)}
-  <Gather input="speech" action="${actionUrl}" method="POST" speechTimeout="auto" timeout="10">
+  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
     ${say("Does that all sound correct? Please say yes or no.")}
   </Gather>
   ${say("I did not catch that.")}
-  <Gather input="speech" action="${actionUrl}" method="POST" speechTimeout="auto" timeout="10">
+  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
     ${say("Please say yes if everything is correct, or say no if something needs to be fixed.")}
   </Gather>
   ${say("I still did not hear anything. Goodbye.")}
@@ -458,11 +458,11 @@ function buildEmailConfirmationTwiml({
   return `
 <Response>
   ${say(`I heard ${formatEmailForSpeech(email)}.`)}
-  <Gather input="speech" action="${actionUrl}" method="POST" speechTimeout="auto" timeout="10">
+  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
     ${say("Is that correct? Please say yes or no.")}
   </Gather>
   ${say("I did not catch that.")}
-  <Gather input="speech" action="${actionUrl}" method="POST" speechTimeout="auto" timeout="10">
+  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
     ${say("Please say yes if the email is correct, or say no to say it again.")}
   </Gather>
   ${say("I still did not hear anything. Goodbye.")}
@@ -1440,6 +1440,7 @@ app.post('/correctAppointmentPhone', (req, res) => {
     return;
   }
 
+  res.type('text/xml');
   res.send(
     buildAppointmentConfirmationTwiml({
       machine,
@@ -1482,6 +1483,7 @@ app.post('/correctAppointmentAddress', (req, res) => {
     return;
   }
 
+  res.type('text/xml');
   res.send(
     buildAppointmentConfirmationTwiml({
       machine,
@@ -1526,6 +1528,7 @@ app.post('/correctAppointmentMachine', (req, res) => {
     return;
   }
 
+  res.type('text/xml');
   res.send(
     buildAppointmentConfirmationTwiml({
       machine,
@@ -1599,6 +1602,7 @@ app.post('/getEmailForAppointment', (req, res) => {
     return;
   }
 
+  res.type('text/xml');
   res.send(
     buildEmailConfirmationTwiml({
       machine,
