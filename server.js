@@ -85,6 +85,14 @@ function xmlEscape(text) {
     .replace(/'/g, '&apos;');
 }
 
+function say(text) {
+  return `<Say voice="alice">${xmlEscape(text)}</Say>`;
+}
+
+function pause(seconds = 1) {
+  return `<Pause length="${seconds}"/>`;
+}
+
 function loadJobs() {
   if (!fs.existsSync(JOBS_FILE)) return [];
   try {
@@ -264,6 +272,52 @@ function detectMachine(input) {
   return null;
 }
 
+// ===== PHONE PARSING =====
+function normalizeSpokenDigits(text) {
+  let t = ` ${String(text || '').toLowerCase()} `;
+
+  const replacements = [
+    [/dash|hyphen|minus/g, ' '],
+    [/open parenthesis|close parenthesis|parenthesis/g, ' '],
+    [/dot|period/g, ' '],
+    [/double oh|double o/g, ' 0 0 '],
+    [/triple oh|triple o/g, ' 0 0 0 '],
+    [/\boh\b/g, ' 0 '],
+    [/\bo\b/g, ' 0 '],
+    [/\bzero\b/g, ' 0 '],
+    [/\bone\b/g, ' 1 '],
+    [/\btwo\b|\bto\b|\btoo\b/g, ' 2 '],
+    [/\bthree\b/g, ' 3 '],
+    [/\bfour\b|\bfor\b/g, ' 4 '],
+    [/\bfive\b/g, ' 5 '],
+    [/\bsix\b/g, ' 6 '],
+    [/\bseven\b/g, ' 7 '],
+    [/\beight\b|\bate\b/g, ' 8 '],
+    [/\bnine\b/g, ' 9 ']
+  ];
+
+  for (const [pattern, replacement] of replacements) {
+    t = t.replace(pattern, replacement);
+  }
+
+  return t.replace(/\D/g, '');
+}
+
+function extractPhoneFromRequest(req) {
+  const dtmf = String(req.body.Digits || '').replace(/\D/g, '');
+  if (dtmf.length >= 10) {
+    return dtmf.slice(0, 10);
+  }
+
+  const speech = req.body.SpeechResult || '';
+  const speechDigits = normalizeSpokenDigits(speech);
+  if (speechDigits.length >= 10) {
+    return speechDigits.slice(0, 10);
+  }
+
+  return '';
+}
+
 // ===== AVAILABILITY / ROUTING =====
 async function rebalanceFridaySaturdayJobs(serviceDate) {
   const jobs = loadJobs();
@@ -399,9 +453,9 @@ function buildVoiceTwiml() {
   return `
 <Response>
   <Gather input="speech" action="/getHelpRequest" method="POST" speechTimeout="auto" timeout="6">
-    <Say>Hello, you have reached Christopher's Small Engine Repair. My name is Emma. How can I help you today?</Say>
+    ${say("Hello, you have reached R L Small Engines. My name is Emma. How can I help you today?")}
   </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim();
 }
@@ -430,11 +484,11 @@ app.post('/getHelpRequest', (req, res) => {
   if (!detectedMachine) {
     res.send(`
 <Response>
-  <Say>Sorry, I could not tell what machine you need help with.</Say>
+  ${say("Sorry, I could not tell what machine you need help with.")}
   <Gather input="speech" action="/getHelpRequest" method="POST" speechTimeout="auto" timeout="6">
-    <Say>Please tell me what machine you need help with, like a lawnmower, riding mower, generator, pressure washer, or snowblower.</Say>
+    ${say("Please tell me what machine you need help with, like a lawnmower, riding mower, generator, pressure washer, or snowblower.")}
   </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
     return;
@@ -442,11 +496,11 @@ app.post('/getHelpRequest', (req, res) => {
 
   res.send(`
 <Response>
-  <Say>Got it. I can help you with that.</Say>
+  ${say("Got it. I can help you with that.")}
   <Gather input="speech" action="/getIssue?machine=${encodeURIComponent(detectedMachine)}" method="POST" speechTimeout="auto" timeout="6">
-    <Say>Please briefly describe the problem with your ${xmlEscape(detectedMachine)}.</Say>
+    ${say(`Please briefly describe the problem with your ${detectedMachine}.`)}
   </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -460,9 +514,9 @@ app.post('/getIssue', (req, res) => {
   res.send(`
 <Response>
   <Gather input="speech" action="/scheduleDecision?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST" speechTimeout="auto" timeout="5">
-    <Say>Would you like to schedule an appointment?</Say>
+    ${say("Would you like to schedule an appointment?")}
   </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -485,9 +539,9 @@ app.post('/scheduleDecision', (req, res) => {
     res.send(`
 <Response>
   <Gather input="dtmf" numDigits="5" action="/getZipForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST" timeout="10">
-    <Say>Please enter your five digit zip code.</Say>
+    ${say("Please enter your five digit zip code.")}
   </Gather>
-  <Say>We did not receive your zip code. Goodbye.</Say>
+  ${say("We did not receive your zip code. Goodbye.")}
 </Response>
 `.trim());
     return;
@@ -496,9 +550,9 @@ app.post('/scheduleDecision', (req, res) => {
   res.send(`
 <Response>
   <Gather input="speech" action="/getNameForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST" speechTimeout="auto" timeout="5">
-    <Say>No problem. Can I get your first and last name, please?</Say>
+    ${say("No problem. Can I get your first and last name, please?")}
   </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -517,8 +571,8 @@ app.post('/getZipForAppointment', async (req, res) => {
     const spokenZip = formatDigitsForSpeech(zip);
     res.send(`
 <Response>
-  <Say>Sorry, ${spokenZip} is not in our service area.</Say>
-  <Say>Please call again if you need anything else. Goodbye.</Say>
+  ${say(`Sorry, ${spokenZip} is not in our service area.`)}
+  ${say("Please call again if you need anything else. Goodbye.")}
 </Response>
 `.trim());
     return;
@@ -527,8 +581,8 @@ app.post('/getZipForAppointment', async (req, res) => {
   if (!slot.serviceDay || !slot.serviceWindow) {
     res.send(`
 <Response>
-  <Say>We could not find an available service window right now.</Say>
-  <Say>We will contact you for the next available opening. Goodbye.</Say>
+  ${say("We could not find an available service window right now.")}
+  ${say("We will contact you for the next available opening. Goodbye.")}
 </Response>
 `.trim());
     return;
@@ -538,13 +592,13 @@ app.post('/getZipForAppointment', async (req, res) => {
 
   res.send(`
 <Response>
-  <Say>Thanks. ${formatDigitsForSpeech(zip)} is in our service area.</Say>
-  <Pause length="1"/>
-  <Say>The next available service window is ${xmlEscape(readableDate)}, between ${xmlEscape(slot.serviceWindow)}.</Say>
+  ${say(`Thanks. ${formatDigitsForSpeech(zip)} is in our service area.`)}
+  ${pause(1)}
+  ${say(`The next available service window is ${readableDate}, between ${slot.serviceWindow}.`)}
   <Gather input="speech" action="/confirmAppointmentSlot?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(slot.serviceDate)}&amp;serviceDay=${encodeURIComponent(slot.serviceDay)}&amp;serviceCounty=${encodeURIComponent(slot.serviceCounty)}&amp;serviceWindow=${encodeURIComponent(slot.serviceWindow)}" method="POST" speechTimeout="auto" timeout="5">
-    <Say>Would you like that appointment?</Say>
+    ${say("Would you like that appointment?")}
   </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -572,7 +626,7 @@ app.post('/confirmAppointmentSlot', (req, res) => {
   if (!accepted) {
     res.send(`
 <Response>
-  <Say>No problem. We will contact you with the next available opening. Goodbye.</Say>
+  ${say("No problem. We will contact you with the next available opening. Goodbye.")}
 </Response>
 `.trim());
     return;
@@ -580,10 +634,12 @@ app.post('/confirmAppointmentSlot', (req, res) => {
 
   res.send(`
 <Response>
+  ${say("Great.")}
+  ${pause(1)}
   <Gather input="speech" action="/getNameForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}" method="POST" speechTimeout="auto" timeout="5">
-    <Say>Great. Can I get your first and last name, please?</Say>
+    ${say("Can I get your first and last name, please?")}
   </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -602,10 +658,12 @@ app.post('/getNameForAppointment', (req, res) => {
   res.type('text/xml');
   res.send(`
 <Response>
-  <Gather input="dtmf" numDigits="10" action="/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}" method="POST" timeout="10">
-    <Say>Thanks, ${xmlEscape(name)}. What is the best phone number to reach you at?</Say>
+  ${say(`Thanks, ${name}.`)}
+  ${pause(1)}
+  <Gather input="speech dtmf" numDigits="10" action="/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("What is the best phone number to reach you at?")}
   </Gather>
-  <Say>We did not receive your phone number. Goodbye.</Say>
+  ${say("We did not receive your phone number. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -620,15 +678,30 @@ app.post('/getPhoneForAppointment', (req, res) => {
   const serviceCounty = req.query.serviceCounty || '';
   const serviceWindow = req.query.serviceWindow || '';
   const name = req.query.name || 'Unknown';
-  const phone = (req.body.Digits || '').slice(0, 10);
+  const phone = extractPhoneFromRequest(req);
 
   res.type('text/xml');
+
+  if (!phone || phone.length < 10) {
+    res.send(`
+<Response>
+  <Gather input="speech dtmf" numDigits="10" action="/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("I did not get the phone number. Please say it again or enter it using your keypad.")}
+  </Gather>
+  ${say("We did not receive your phone number. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
   res.send(`
 <Response>
+  ${say("Thanks.")}
+  ${pause(1)}
   <Gather input="speech" action="/getAddressForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="auto" timeout="6">
-    <Say>Thanks. What is the service address?</Say>
+    ${say("What is the service address?")}
   </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -651,15 +724,15 @@ app.post('/getAddressForAppointment', (req, res) => {
   res.send(`
 <Response>
   <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="7">
-    <Say>Let me confirm everything.</Say>
-    <Pause length="1"/>
-    <Say>I have your name as ${xmlEscape(name)}, phone number ${xmlEscape(formatDigitsForSpeech(phone))}, zip code ${xmlEscape(formatDigitsForSpeech(zip))}, service address ${xmlEscape(address)}, and your ${xmlEscape(machine)} has ${xmlEscape(issue)}.</Say>
-    <Pause length="1"/>
-    <Say>The available appointment is ${xmlEscape(readableDate)} between ${xmlEscape(serviceWindow)}.</Say>
-    <Pause length="1"/>
-    <Say>Does that all sound correct?</Say>
+    ${say("Let me confirm everything.")}
+    ${pause(1)}
+    ${say(`I have your name as ${name}, phone number ${formatDigitsForSpeech(phone)}, zip code ${formatDigitsForSpeech(zip)}, service address ${address}, and your ${machine} has ${issue}.`)}
+    ${pause(1)}
+    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
+    ${pause(1)}
+    ${say("Does that all sound correct?")}
   </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -689,7 +762,7 @@ app.post('/finalConfirmAppointment', async (req, res) => {
   if (!accepted) {
     res.send(`
 <Response>
-  <Say>No problem. Please call back so we can correct the information. Goodbye.</Say>
+  ${say("No problem. Please call back so we can correct the information. Goodbye.")}
 </Response>
 `.trim());
     return;
@@ -726,11 +799,11 @@ app.post('/finalConfirmAppointment', async (req, res) => {
 
   res.send(`
 <Response>
-  <Say>Great. You are all set.</Say>
-  <Pause length="1"/>
-  <Say>I have booked your appointment for ${xmlEscape(readableDate)} between ${xmlEscape(serviceWindow)}.</Say>
-  <Pause length="1"/>
-  <Say>We look forward to helping with your ${xmlEscape(machine)}. Have a wonderful day.</Say>
+  ${say("Great. You are all set.")}
+  ${pause(1)}
+  ${say(`I have booked your appointment for ${readableDate} between ${serviceWindow}.`)}
+  ${pause(1)}
+  ${say(`We look forward to helping with your ${machine}. Have a wonderful day.`)}
 </Response>
 `.trim());
 });
@@ -744,10 +817,12 @@ app.post('/getNameForMessage', (req, res) => {
   res.type('text/xml');
   res.send(`
 <Response>
-  <Gather input="dtmf" numDigits="10" action="/getPhoneForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}" method="POST" timeout="10">
-    <Say>Thanks, ${xmlEscape(name)}. What is the best phone number to reach you at?</Say>
+  ${say(`Thanks, ${name}.`)}
+  ${pause(1)}
+  <Gather input="speech dtmf" numDigits="10" action="/getPhoneForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("What is the best phone number to reach you at?")}
   </Gather>
-  <Say>We did not receive your phone number. Goodbye.</Say>
+  ${say("We did not receive your phone number. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -756,15 +831,30 @@ app.post('/getPhoneForMessage', (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const name = req.query.name || 'Unknown';
-  const phone = (req.body.Digits || '').slice(0, 10);
+  const phone = extractPhoneFromRequest(req);
 
   res.type('text/xml');
+
+  if (!phone || phone.length < 10) {
+    res.send(`
+<Response>
+  <Gather input="speech dtmf" numDigits="10" action="/getPhoneForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("I did not get the phone number. Please say it again or enter it using your keypad.")}
+  </Gather>
+  ${say("We did not receive your phone number. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
   res.send(`
 <Response>
+  ${say("Thanks.")}
+  ${pause(1)}
   <Gather input="speech" action="/getAddressForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="auto" timeout="6">
-    <Say>Thanks. What is the service address?</Say>
+    ${say("What is the service address?")}
   </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -780,13 +870,13 @@ app.post('/getAddressForMessage', (req, res) => {
   res.send(`
 <Response>
   <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="7">
-    <Say>Let me confirm everything.</Say>
-    <Pause length="1"/>
-    <Say>I have your name as ${xmlEscape(name)}, phone number ${xmlEscape(formatDigitsForSpeech(phone))}, service address ${xmlEscape(address)}, and your ${xmlEscape(machine)} has ${xmlEscape(issue)}.</Say>
-    <Pause length="1"/>
-    <Say>Does that all sound correct?</Say>
+    ${say("Let me confirm everything.")}
+    ${pause(1)}
+    ${say(`I have your name as ${name}, phone number ${formatDigitsForSpeech(phone)}, service address ${address}, and your ${machine} has ${issue}.`)}
+    ${pause(1)}
+    ${say("Does that all sound correct?")}
   </Gather>
-  <Say>I did not hear anything. Goodbye.</Say>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -810,7 +900,7 @@ app.post('/finalConfirmMessage', (req, res) => {
   if (!accepted) {
     res.send(`
 <Response>
-  <Say>No problem. Please call back so we can correct the information. Goodbye.</Say>
+  ${say("No problem. Please call back so we can correct the information. Goodbye.")}
 </Response>
 `.trim());
     return;
@@ -831,7 +921,7 @@ app.post('/finalConfirmMessage', (req, res) => {
 
   res.send(`
 <Response>
-  <Say>Thank you. Your message has been received. We will contact you shortly. Goodbye.</Say>
+  ${say("Thank you. Your message has been received. We will contact you shortly. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -857,7 +947,7 @@ app.post('/voicemail', (req, res) => {
   res.type('text/xml');
   res.send(`
 <Response>
-  <Say>Thank you. Your message has been recorded. Goodbye.</Say>
+  ${say("Thank you. Your message has been recorded. Goodbye.")}
 </Response>
 `.trim());
 });
