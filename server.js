@@ -87,7 +87,7 @@ function say(text) {
 
 // FIX: space out each digit so Alice reads them individually
 function sayDigits(digits) {
-  const onlyDigits = String(digits || '').replace(/\D/g, '').split('').join(' ');
+  const onlyDigits = String(digits || '').replace(/\D/g, '').split('').join('. ');
   return `<Say voice="alice">${onlyDigits}</Say>`;
 }
 
