@@ -255,6 +255,41 @@ function normalizeNameText(name) {
     .trim();
 }
 
+function normalizeEmailSpeech(text) {
+  let email = String(text || '').toLowerCase().trim();
+
+  email = email.replace(/\s+at\s+/g, '@');
+  email = email.replace(/\sat\s/g, '@');
+  email = email.replace(/\s+dot\s+/g, '.');
+  email = email.replace(/\sdot\s/g, '.');
+  email = email.replace(/\s+underscore\s+/g, '_');
+  email = email.replace(/\sunderscore\s/g, '_');
+  email = email.replace(/\s+dash\s+/g, '-');
+  email = email.replace(/\sdash\s/g, '-');
+  email = email.replace(/\s+hyphen\s+/g, '-');
+  email = email.replace(/\shyphen\s/g, '-');
+  email = email.replace(/\s+plus\s+/g, '+');
+  email = email.replace(/\splus\s/g, '+');
+  email = email.replace(/\s/g, '');
+
+  return email;
+}
+
+function formatEmailForSpeech(email) {
+  return String(email || '')
+    .replace(/@/g, ' at ')
+    .replace(/\./g, ' dot ')
+    .replace(/_/g, ' underscore ')
+    .replace(/-/g, ' dash ')
+    .replace(/\+/g, ' plus ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isLikelyEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
 function loadJobs() {
   if (!fs.existsSync(JOBS_FILE)) return [];
   try {
@@ -1378,8 +1413,46 @@ app.post('/correctAppointmentIssue', (req, res) => {
 `.trim());
 });
 
-// ===== STEP 5D: FINAL APPOINTMENT CONFIRM =====
-app.post('/finalConfirmAppointment', async (req, res) => {
+// ===== EMAIL CAPTURE FOR APPOINTMENTS =====
+app.post('/getEmailForAppointment', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = req.query.address || '';
+  const email = normalizeEmailSpeech(req.body.SpeechResult || '');
+
+  res.type('text/xml');
+
+  if (!isLikelyEmail(email)) {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("I did not get a valid email address. Please say it again, for example, name at gmail dot com.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  res.send(`
+<Response>
+  ${say(`I heard ${formatEmailForSpeech(email)}.`)}
+  <Gather input="speech" action="/confirmAppointmentEmail?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}&amp;email=${encodeURIComponent(email)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Is that correct?")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
+app.post('/confirmAppointmentEmail', async (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1390,21 +1463,22 @@ app.post('/finalConfirmAppointment', async (req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
   const address = req.query.address || '';
+  const email = req.query.email || '';
   const decision = cleanText(req.body.SpeechResult || '');
 
   const accepted =
     decision.includes('yes') ||
     decision.includes('correct') ||
-    decision.includes('sounds correct') ||
-    decision.includes('that is correct');
+    decision.includes('that is correct') ||
+    decision.includes('sounds correct');
 
   res.type('text/xml');
 
   if (!accepted) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/appointmentCorrectionChoice?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Okay. What needs to be corrected? You can say name, phone number, address, machine, issue, or appointment.")}
+  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Okay. Please say the email address again.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
@@ -1421,6 +1495,7 @@ app.post('/finalConfirmAppointment', async (req, res) => {
     zip,
     phone,
     address,
+    email,
     serviceDate,
     serviceDay,
     serviceCounty,
@@ -1447,7 +1522,53 @@ app.post('/finalConfirmAppointment', async (req, res) => {
   ${pause(1)}
   ${say(`I have booked your appointment for ${readableDate} between ${serviceWindow}.`)}
   ${pause(1)}
+  ${say(`I have your email as ${formatEmailForSpeech(email)}.`)}
+  ${pause(1)}
   ${say(`We look forward to helping with your ${machine}. Have a wonderful day.`)}
+</Response>
+`.trim());
+});
+
+// ===== STEP 5D: FINAL APPOINTMENT CONFIRM =====
+app.post('/finalConfirmAppointment', async (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const address = req.query.address || '';
+  const decision = cleanText(req.body.SpeechResult || '');
+
+  const accepted =
+    decision.includes('yes') ||
+    decision.includes('correct') ||
+    decision.includes('sounds correct') ||
+    decision.includes('that is correct');
+
+  res.type('text/xml');
+
+  if (!accepted) {
+    res.send(`
+<Response>
+  <Gather input="speech" action="/appointmentCorrectionChoice?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Okay. What needs to be corrected? You can say name, phone number, address, machine, issue, or appointment.")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  res.send(`
+<Response>
+  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Great. What email address would you like us to use for your appointment confirmation?")}
+  </Gather>
+  ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -1927,6 +2048,7 @@ app.get('/jobs', (req, res) => {
     ${job.zip ? `<div class="line">ZIP: ${job.zip}</div>` : ''}
     ${job.phone ? `<div class="line">Phone: ${job.phone}</div>` : ''}
     ${job.address ? `<div class="line">Address: ${job.address}</div>` : ''}
+    ${job.email ? `<div class="line">Email: ${job.email}</div>` : ''}
     ${job.serviceDate ? `<div class="line">Service Date: ${job.serviceDate}</div>` : ''}
     ${job.serviceDay ? `<div class="line">Service Day: ${job.serviceDay}</div>` : ''}
     ${job.serviceCounty ? `<div class="line">County: ${job.serviceCounty}</div>` : ''}
