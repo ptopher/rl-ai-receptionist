@@ -218,29 +218,48 @@ function normalizeStreetSuffixWord(word) {
   return streetMap[lower] || null;
 }
 
+function cleanAddressPunctuation(text) {
+  return String(text || '')
+    .replace(/[?!"“”]/g, '')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/\s*\.\s*/g, '. ')
+    .replace(/,+/g, ',')
+    .replace(/\.+/g, '.')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 function normalizeAddressText(address) {
   const corrected = applyLocalCorrections(address);
-  const tokens = corrected.split(/\s+/);
+  const punctuationCleaned = cleanAddressPunctuation(corrected);
+  const tokens = punctuationCleaned.split(/\s+/);
+
   const normalized = tokens.map((token) => {
-    if (/^\d[\d-]*$/.test(token)) {
-      return token;
+    const stripped = token.replace(/[,.]/g, '');
+    const trailingComma = token.endsWith(',') ? ',' : '';
+    const trailingPeriod = token.endsWith('.') ? '.' : '';
+
+    if (/^\d[\d-]*$/.test(stripped)) {
+      return `${stripped}${trailingComma}${trailingPeriod}`;
     }
 
-    const suffix = normalizeStreetSuffixWord(token);
+    const suffix = normalizeStreetSuffixWord(stripped);
     if (suffix) {
-      return suffix;
+      return `${suffix}${trailingComma}${trailingPeriod}`;
     }
 
-    return token
+    const rebuilt = stripped
       .split('-')
       .map((piece) => {
         if (!piece) return piece;
         return piece.charAt(0).toUpperCase() + piece.slice(1).toLowerCase();
       })
       .join('-');
+
+    return `${rebuilt}${trailingComma}${trailingPeriod}`;
   });
 
-  return normalized.join(' ').trim();
+  return normalized.join(' ').replace(/\s{2,}/g, ' ').trim();
 }
 
 function normalizeNameText(name) {
@@ -348,6 +367,19 @@ function formatEmailForSpeech(email) {
 
 function isLikelyEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
+function getLocalTimestamp() {
+  return new Date().toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
 }
 
 function buildAppointmentConfirmationTwiml({
@@ -1668,7 +1700,7 @@ app.post('/confirmAppointmentEmail', async (req, res) => {
     serviceDay,
     serviceCounty,
     serviceWindow,
-    time: new Date().toLocaleString()
+    time: getLocalTimestamp()
   };
 
   saveJob(job);
@@ -2089,7 +2121,7 @@ app.post('/finalConfirmMessage', (req, res) => {
     problem: issue,
     phone,
     address,
-    time: new Date().toLocaleString()
+    time: getLocalTimestamp()
   };
 
   saveJob(job);
@@ -2114,7 +2146,7 @@ app.post('/voicemail', (req, res) => {
     zip: req.query.zip || 'Unknown',
     serviceCounty: matchedCounties.join(', '),
     recording: req.body.RecordingUrl || '',
-    time: new Date().toLocaleString()
+    time: getLocalTimestamp()
   };
 
   saveJob(job);
