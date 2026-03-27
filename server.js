@@ -72,17 +72,6 @@ function titleCase(text) {
     .join(' ');
 }
 
-function formatDigitsForSpeech(digits) {
-  return (digits || '').split('').join(' ');
-}
-
-function formatDigitsForTts(digits) {
-  return String(digits || '')
-    .replace(/\D/g, '')
-    .split('')
-    .join(', ');
-}
-
 function xmlEscape(text) {
   return String(text || '')
     .replace(/&/g, '&amp;')
@@ -94,6 +83,11 @@ function xmlEscape(text) {
 
 function say(text) {
   return `<Say voice="alice">${xmlEscape(text)}</Say>`;
+}
+
+function sayDigits(digits) {
+  const onlyDigits = String(digits || '').replace(/\D/g, '');
+  return `<Say voice="alice"><Say-as interpret-as="digits">${onlyDigits}</Say-as></Say>`;
 }
 
 function pause(seconds = 1) {
@@ -563,7 +557,7 @@ app.post('/scheduleDecision', (req, res) => {
 
   res.send(`
 <Response>
-  <Gather input="speech" action="/getNameForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST" speechTimeout="auto" timeout="6">
+  <Gather input="speech" action="/getNameForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST" speechTimeout="3" timeout="8">
     ${say("No problem. Can I get your first and last name, please?")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -582,10 +576,11 @@ app.post('/getZipForAppointment', async (req, res) => {
   res.type('text/xml');
 
   if (!slot) {
-    const spokenZip = formatDigitsForTts(zip);
     res.send(`
 <Response>
-  ${say(`Sorry, ${spokenZip} is not in our service area.`)}
+  ${say("Sorry,")}
+  ${sayDigits(zip)}
+  ${say("is not in our service area.")}
   ${say("Please call again if you need anything else. Goodbye.")}
 </Response>
 `.trim());
@@ -606,7 +601,9 @@ app.post('/getZipForAppointment', async (req, res) => {
 
   res.send(`
 <Response>
-  ${say(`Thanks. ${formatDigitsForTts(zip)} is in our service area.`)}
+  ${say("Thanks.")}
+  ${sayDigits(zip)}
+  ${say("is in our service area.")}
   ${pause(1)}
   ${say(`The next available service window is ${readableDate}, between ${slot.serviceWindow}.`)}
   <Gather input="speech" action="/confirmAppointmentSlot?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(slot.serviceDate)}&amp;serviceDay=${encodeURIComponent(slot.serviceDay)}&amp;serviceCounty=${encodeURIComponent(slot.serviceCounty)}&amp;serviceWindow=${encodeURIComponent(slot.serviceWindow)}" method="POST" speechTimeout="auto" timeout="5">
@@ -650,7 +647,7 @@ app.post('/confirmAppointmentSlot', (req, res) => {
 <Response>
   ${say("Great.")}
   ${pause(1)}
-  <Gather input="speech" action="/getNameForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}" method="POST" speechTimeout="auto" timeout="6">
+  <Gather input="speech" action="/getNameForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}" method="POST" speechTimeout="3" timeout="8">
     ${say("Can I get your first and last name, please?")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -754,7 +751,11 @@ app.post('/getAddressForAppointment', (req, res) => {
   <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Let me confirm everything.")}
     ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${formatDigitsForTts(phone)}, zip code ${formatDigitsForTts(zip)}, service address ${address}, and your ${machine} has ${issue}.`)}
+    ${say(`I have your name as ${name}, phone number`)}
+    ${sayDigits(phone)}
+    ${say("zip code")}
+    ${sayDigits(zip)}
+    ${say(`service address ${address}, and your ${machine} has ${issue}.`)}
     ${pause(1)}
     ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
     ${pause(1)}
@@ -913,7 +914,9 @@ app.post('/getAddressForMessage', (req, res) => {
   <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Let me confirm everything.")}
     ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${formatDigitsForTts(phone)}, service address ${address}, and your ${machine} has ${issue}.`)}
+    ${say(`I have your name as ${name}, phone number`)}
+    ${sayDigits(phone)}
+    ${say(`service address ${address}, and your ${machine} has ${issue}.`)}
     ${pause(1)}
     ${say("Does that all sound correct?")}
   </Gather>
