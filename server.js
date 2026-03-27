@@ -91,6 +91,24 @@ function sayDigits(digits) {
   return `<Say voice="alice">${onlyDigits}</Say>`;
 }
 
+// FIX: convert "10:00 to 10:30" → "10 to 10 30" so Alice doesn't read thousands
+function sayTime(timeRange) {
+  return String(timeRange || '').replace(/(\d+):(\d+)/g, (_, h, m) => {
+    return m === '00' ? h : `${h} ${m}`;
+  });
+}
+
+// FIX: split house number from street name so Alice reads digits individually
+function sayAddress(address) {
+  const match = String(address || "").match(/^(\d+)\s*(.*)$/);
+  if (match) {
+    const houseNumber = match[1].split("").join(" ");
+    const streetName = match[2];
+    return `<Say voice="alice">${houseNumber}</Say><Say voice="alice">${xmlEscape(streetName)}</Say>`;
+  }
+  return `<Say voice="alice">${xmlEscape(address)}</Say>`;
+}
+
 function pause(seconds = 1) {
   return `<Pause length="${seconds}"/>`;
 }
@@ -604,7 +622,7 @@ app.post('/getZipForAppointment', async (req, res) => {
   ${sayDigits(zip)}
   ${say("is in our service area.")}
   ${pause(1)}
-  ${say(`The next available service window is ${readableDate}, between ${slot.serviceWindow}.`)}
+  ${say(`The next available service window is ${readableDate}, between ${sayTime(slot.serviceWindow)}.`)}
   <Gather input="speech" action="/confirmAppointmentSlot?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(slot.serviceDate)}&amp;serviceDay=${encodeURIComponent(slot.serviceDay)}&amp;serviceCounty=${encodeURIComponent(slot.serviceCounty)}&amp;serviceWindow=${encodeURIComponent(slot.serviceWindow)}" method="POST" speechTimeout="auto" timeout="5">
     ${say("Would you like that appointment?")}
   </Gather>
@@ -754,9 +772,9 @@ app.post('/getAddressForAppointment', (req, res) => {
     ${sayDigits(phone)}
     ${say("zip code")}
     ${sayDigits(zip)}
-    ${say(`service address ${address}, and your ${machine} has ${issue}.`)}
+    ${say("service address")} ${sayAddress(address)} ${say(`and your ${machine} has ${issue}.`)}
     ${pause(1)}
-    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
+    ${say(`The available appointment is ${readableDate} between ${sayTime(serviceWindow)}.`)}
     ${pause(1)}
     ${say("Does that all sound correct?")}
   </Gather>
@@ -829,7 +847,7 @@ app.post('/finalConfirmAppointment', async (req, res) => {
 <Response>
   ${say("Great. You are all set.")}
   ${pause(1)}
-  ${say(`I have booked your appointment for ${readableDate} between ${serviceWindow}.`)}
+  ${say(`I have booked your appointment for ${readableDate} between ${sayTime(serviceWindow)}.`)}
   ${pause(1)}
   ${say(`We look forward to helping with your ${machine}. Have a wonderful day.`)}
 </Response>
@@ -915,7 +933,7 @@ app.post('/getAddressForMessage', (req, res) => {
     ${pause(1)}
     ${say(`I have your name as ${name}, phone number`)}
     ${sayDigits(phone)}
-    ${say(`service address ${address}, and your ${machine} has ${issue}.`)}
+    ${say("service address")} ${sayAddress(address)} ${say(`and your ${machine} has ${issue}.`)}
     ${pause(1)}
     ${say("Does that all sound correct?")}
   </Gather>
