@@ -350,6 +350,126 @@ function isLikelyEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 }
 
+function buildAppointmentConfirmationTwiml({
+  machine,
+  issue,
+  zip,
+  serviceDate,
+  serviceDay,
+  serviceCounty,
+  serviceWindow,
+  name,
+  phone,
+  address
+}) {
+  const readableDate = getReadableDate(serviceDate);
+  const spokenAddress = formatAddressForSpeech(address);
+  const actionUrl =
+    `/finalConfirmAppointment?machine=${encodeURIComponent(machine)}` +
+    `&issue=${encodeURIComponent(issue)}` +
+    `&zip=${encodeURIComponent(zip)}` +
+    `&serviceDate=${encodeURIComponent(serviceDate)}` +
+    `&serviceDay=${encodeURIComponent(serviceDay)}` +
+    `&serviceCounty=${encodeURIComponent(serviceCounty)}` +
+    `&serviceWindow=${encodeURIComponent(serviceWindow)}` +
+    `&name=${encodeURIComponent(name)}` +
+    `&phone=${encodeURIComponent(phone)}` +
+    `&address=${encodeURIComponent(address)}`;
+
+  return `
+<Response>
+  ${say("Let me confirm everything.")}
+  ${pause(1)}
+  ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+  ${pause(1)}
+  ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
+  ${pause(1)}
+  <Gather input="speech" action="${actionUrl}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Does that all sound correct? Please say yes or no.")}
+  </Gather>
+  ${say("I did not catch that.")}
+  <Gather input="speech" action="${actionUrl}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say yes if everything is correct, or say no if something needs to be fixed.")}
+  </Gather>
+  ${say("I still did not hear anything. Goodbye.")}
+</Response>
+`.trim();
+}
+
+function buildMessageConfirmationTwiml({
+  machine,
+  issue,
+  name,
+  phone,
+  address
+}) {
+  const spokenAddress = formatAddressForSpeech(address);
+  const actionUrl =
+    `/finalConfirmMessage?machine=${encodeURIComponent(machine)}` +
+    `&issue=${encodeURIComponent(issue)}` +
+    `&name=${encodeURIComponent(name)}` +
+    `&phone=${encodeURIComponent(phone)}` +
+    `&address=${encodeURIComponent(address)}`;
+
+  return `
+<Response>
+  ${say("Let me confirm everything.")}
+  ${pause(1)}
+  ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+  ${pause(1)}
+  <Gather input="speech" action="${actionUrl}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Does that all sound correct? Please say yes or no.")}
+  </Gather>
+  ${say("I did not catch that.")}
+  <Gather input="speech" action="${actionUrl}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say yes if everything is correct, or say no if something needs to be fixed.")}
+  </Gather>
+  ${say("I still did not hear anything. Goodbye.")}
+</Response>
+`.trim();
+}
+
+function buildEmailConfirmationTwiml({
+  machine,
+  issue,
+  zip,
+  serviceDate,
+  serviceDay,
+  serviceCounty,
+  serviceWindow,
+  name,
+  phone,
+  address,
+  email
+}) {
+  const actionUrl =
+    `/confirmAppointmentEmail?machine=${encodeURIComponent(machine)}` +
+    `&issue=${encodeURIComponent(issue)}` +
+    `&zip=${encodeURIComponent(zip)}` +
+    `&serviceDate=${encodeURIComponent(serviceDate)}` +
+    `&serviceDay=${encodeURIComponent(serviceDay)}` +
+    `&serviceCounty=${encodeURIComponent(serviceCounty)}` +
+    `&serviceWindow=${encodeURIComponent(serviceWindow)}` +
+    `&name=${encodeURIComponent(name)}` +
+    `&phone=${encodeURIComponent(phone)}` +
+    `&address=${encodeURIComponent(address)}` +
+    `&email=${encodeURIComponent(email)}`;
+
+  return `
+<Response>
+  ${say(`I heard ${formatEmailForSpeech(email)}.`)}
+  <Gather input="speech" action="${actionUrl}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Is that correct? Please say yes or no.")}
+  </Gather>
+  ${say("I did not catch that.")}
+  <Gather input="speech" action="${actionUrl}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say yes if the email is correct, or say no to say it again.")}
+  </Gather>
+  ${say("I still did not hear anything. Goodbye.")}
+</Response>
+`.trim();
+}
+
 function loadJobs() {
   if (!fs.existsSync(JOBS_FILE)) return [];
   try {
@@ -1146,23 +1266,21 @@ app.post('/getAddressForAppointment', (req, res) => {
     return;
   }
 
-  const readableDate = getReadableDate(serviceDate);
-  const spokenAddress = formatAddressForSpeech(address);
-
-  res.send(`
-<Response>
-  <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Let me confirm everything.")}
-    ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-    ${pause(1)}
-    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
-    ${pause(1)}
-    ${say("Does that all sound correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.type('text/xml');
+  res.send(
+    buildAppointmentConfirmationTwiml({
+      machine,
+      issue,
+      zip,
+      serviceDate,
+      serviceDay,
+      serviceCounty,
+      serviceWindow,
+      name,
+      phone,
+      address
+    })
+  );
 });
 
 // ===== APPOINTMENT CORRECTION CHOICE =====
@@ -1279,25 +1397,21 @@ app.post('/correctAppointmentName', (req, res) => {
   const address = req.query.address || '';
   const name = normalizeNameText(req.body.SpeechResult);
 
-  const readableDate = getReadableDate(serviceDate);
-  const spokenAddress = formatAddressForSpeech(address);
-
   res.type('text/xml');
-  res.send(`
-<Response>
-  ${say("Got it. I updated the name.")}
-  <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Let me confirm everything again.")}
-    ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-    ${pause(1)}
-    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
-    ${pause(1)}
-    ${say("Does that all sound correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.send(
+    buildAppointmentConfirmationTwiml({
+      machine,
+      issue,
+      zip,
+      serviceDate,
+      serviceDay,
+      serviceCounty,
+      serviceWindow,
+      name,
+      phone,
+      address
+    })
+  );
 });
 
 app.post('/correctAppointmentPhone', (req, res) => {
@@ -1326,24 +1440,20 @@ app.post('/correctAppointmentPhone', (req, res) => {
     return;
   }
 
-  const readableDate = getReadableDate(serviceDate);
-  const spokenAddress = formatAddressForSpeech(address);
-
-  res.send(`
-<Response>
-  ${say("Got it. I updated the phone number.")}
-  <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Let me confirm everything again.")}
-    ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-    ${pause(1)}
-    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
-    ${pause(1)}
-    ${say("Does that all sound correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.send(
+    buildAppointmentConfirmationTwiml({
+      machine,
+      issue,
+      zip,
+      serviceDate,
+      serviceDay,
+      serviceCounty,
+      serviceWindow,
+      name,
+      phone,
+      address
+    })
+  );
 });
 
 app.post('/correctAppointmentAddress', (req, res) => {
@@ -1372,24 +1482,20 @@ app.post('/correctAppointmentAddress', (req, res) => {
     return;
   }
 
-  const readableDate = getReadableDate(serviceDate);
-  const spokenAddress = formatAddressForSpeech(address);
-
-  res.send(`
-<Response>
-  ${say("Got it. I updated the address.")}
-  <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Let me confirm everything again.")}
-    ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-    ${pause(1)}
-    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
-    ${pause(1)}
-    ${say("Does that all sound correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.send(
+    buildAppointmentConfirmationTwiml({
+      machine,
+      issue,
+      zip,
+      serviceDate,
+      serviceDay,
+      serviceCounty,
+      serviceWindow,
+      name,
+      phone,
+      address
+    })
+  );
 });
 
 app.post('/correctAppointmentMachine', (req, res) => {
@@ -1404,11 +1510,11 @@ app.post('/correctAppointmentMachine', (req, res) => {
   const phone = req.query.phone || '';
   const address = req.query.address || '';
 
-  const detectedMachine = detectMachine(req.body.SpeechResult || '');
+  const machine = detectMachine(req.body.SpeechResult || '');
 
   res.type('text/xml');
 
-  if (!detectedMachine) {
+  if (!machine) {
     res.send(`
 <Response>
   <Gather input="speech" action="/correctAppointmentMachine?machine=${encodeURIComponent(currentMachine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
@@ -1420,24 +1526,20 @@ app.post('/correctAppointmentMachine', (req, res) => {
     return;
   }
 
-  const readableDate = getReadableDate(serviceDate);
-  const spokenAddress = formatAddressForSpeech(address);
-
-  res.send(`
-<Response>
-  ${say("Got it. I updated the machine.")}
-  <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(detectedMachine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Let me confirm everything again.")}
-    ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${detectedMachine} has ${issue}.`)}
-    ${pause(1)}
-    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
-    ${pause(1)}
-    ${say("Does that all sound correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.send(
+    buildAppointmentConfirmationTwiml({
+      machine,
+      issue,
+      zip,
+      serviceDate,
+      serviceDay,
+      serviceCounty,
+      serviceWindow,
+      name,
+      phone,
+      address
+    })
+  );
 });
 
 app.post('/correctAppointmentIssue', (req, res) => {
@@ -1452,25 +1554,21 @@ app.post('/correctAppointmentIssue', (req, res) => {
   const address = req.query.address || '';
   const issue = normalizeAddressText(req.body.SpeechResult || 'Unknown');
 
-  const readableDate = getReadableDate(serviceDate);
-  const spokenAddress = formatAddressForSpeech(address);
-
   res.type('text/xml');
-  res.send(`
-<Response>
-  ${say("Got it. I updated the issue.")}
-  <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Let me confirm everything again.")}
-    ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-    ${pause(1)}
-    ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
-    ${pause(1)}
-    ${say("Does that all sound correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.send(
+    buildAppointmentConfirmationTwiml({
+      machine,
+      issue,
+      zip,
+      serviceDate,
+      serviceDay,
+      serviceCounty,
+      serviceWindow,
+      name,
+      phone,
+      address
+    })
+  );
 });
 
 // ===== EMAIL CAPTURE FOR APPOINTMENTS =====
@@ -1501,15 +1599,21 @@ app.post('/getEmailForAppointment', (req, res) => {
     return;
   }
 
-  res.send(`
-<Response>
-  ${say(`I heard ${formatEmailForSpeech(email)}.`)}
-  <Gather input="speech" action="/confirmAppointmentEmail?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}&amp;email=${encodeURIComponent(email)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Is that correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.send(
+    buildEmailConfirmationTwiml({
+      machine,
+      issue,
+      zip,
+      serviceDate,
+      serviceDay,
+      serviceCounty,
+      serviceWindow,
+      name,
+      phone,
+      address,
+      email
+    })
+  );
 });
 
 app.post('/confirmAppointmentEmail', async (req, res) => {
@@ -1538,7 +1642,7 @@ app.post('/confirmAppointmentEmail', async (req, res) => {
     res.send(`
 <Response>
   <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="15">
-    ${say("Okay. Please say the email address again, slowly.")}
+    ${say("Okay. Please say the email address again.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
@@ -1625,10 +1729,16 @@ app.post('/finalConfirmAppointment', async (req, res) => {
 
   res.send(`
 <Response>
+  ${say("Great.")}
+  ${pause(1)}
   <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="15">
-    ${say("Great. What email address would you like us to use for your appointment confirmation? Please say it slowly.")}
+    ${say("What email address would you like us to use for your appointment confirmation?")}
   </Gather>
-  ${say("I did not hear anything. Goodbye.")}
+  ${say("I did not catch that.")}
+  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="15">
+    ${say("Please say the email address you want us to use.")}
+  </Gather>
+  ${say("I still did not hear anything. Goodbye.")}
 </Response>
 `.trim());
 });
@@ -1705,20 +1815,16 @@ app.post('/getAddressForMessage', (req, res) => {
     return;
   }
 
-  const spokenAddress = formatAddressForSpeech(address);
-
-  res.send(`
-<Response>
-  <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Let me confirm everything.")}
-    ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-    ${pause(1)}
-    ${say("Does that all sound correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.type('text/xml');
+  res.send(
+    buildMessageConfirmationTwiml({
+      machine,
+      issue,
+      name,
+      phone,
+      address
+    })
+  );
 });
 
 // ===== MESSAGE CORRECTION CHOICE =====
@@ -1811,22 +1917,17 @@ app.post('/correctMessageName', (req, res) => {
   const phone = req.query.phone || '';
   const address = req.query.address || '';
   const name = normalizeNameText(req.body.SpeechResult);
-  const spokenAddress = formatAddressForSpeech(address);
 
   res.type('text/xml');
-  res.send(`
-<Response>
-  ${say("Got it. I updated the name.")}
-  <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Let me confirm everything again.")}
-    ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-    ${pause(1)}
-    ${say("Does that all sound correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.send(
+    buildMessageConfirmationTwiml({
+      machine,
+      issue,
+      name,
+      phone,
+      address
+    })
+  );
 });
 
 app.post('/correctMessagePhone', (req, res) => {
@@ -1850,21 +1951,16 @@ app.post('/correctMessagePhone', (req, res) => {
     return;
   }
 
-  const spokenAddress = formatAddressForSpeech(address);
-
-  res.send(`
-<Response>
-  ${say("Got it. I updated the phone number.")}
-  <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Let me confirm everything again.")}
-    ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-    ${pause(1)}
-    ${say("Does that all sound correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.type('text/xml');
+  res.send(
+    buildMessageConfirmationTwiml({
+      machine,
+      issue,
+      name,
+      phone,
+      address
+    })
+  );
 });
 
 app.post('/correctMessageAddress', (req, res) => {
@@ -1888,21 +1984,16 @@ app.post('/correctMessageAddress', (req, res) => {
     return;
   }
 
-  const spokenAddress = formatAddressForSpeech(address);
-
-  res.send(`
-<Response>
-  ${say("Got it. I updated the address.")}
-  <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Let me confirm everything again.")}
-    ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-    ${pause(1)}
-    ${say("Does that all sound correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.type('text/xml');
+  res.send(
+    buildMessageConfirmationTwiml({
+      machine,
+      issue,
+      name,
+      phone,
+      address
+    })
+  );
 });
 
 app.post('/correctMessageMachine', (req, res) => {
@@ -1911,7 +2002,6 @@ app.post('/correctMessageMachine', (req, res) => {
   const phone = req.query.phone || '';
   const address = req.query.address || '';
   const machine = detectMachine(req.body.SpeechResult || '');
-  const spokenAddress = formatAddressForSpeech(address);
 
   res.type('text/xml');
 
@@ -1927,19 +2017,16 @@ app.post('/correctMessageMachine', (req, res) => {
     return;
   }
 
-  res.send(`
-<Response>
-  ${say("Got it. I updated the machine.")}
-  <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Let me confirm everything again.")}
-    ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-    ${pause(1)}
-    ${say("Does that all sound correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.type('text/xml');
+  res.send(
+    buildMessageConfirmationTwiml({
+      machine,
+      issue,
+      name,
+      phone,
+      address
+    })
+  );
 });
 
 app.post('/correctMessageIssue', (req, res) => {
@@ -1948,22 +2035,17 @@ app.post('/correctMessageIssue', (req, res) => {
   const phone = req.query.phone || '';
   const address = req.query.address || '';
   const issue = normalizeAddressText(req.body.SpeechResult || 'Unknown');
-  const spokenAddress = formatAddressForSpeech(address);
 
   res.type('text/xml');
-  res.send(`
-<Response>
-  ${say("Got it. I updated the issue.")}
-  <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Let me confirm everything again.")}
-    ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-    ${pause(1)}
-    ${say("Does that all sound correct?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
+  res.send(
+    buildMessageConfirmationTwiml({
+      machine,
+      issue,
+      name,
+      phone,
+      address
+    })
+  );
 });
 
 // ===== FINAL MESSAGE CONFIRM =====
