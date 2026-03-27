@@ -85,10 +85,11 @@ function say(text) {
   return `<Say voice="alice">${xmlEscape(text)}</Say>`;
 }
 
-// FIX: space out each digit so Alice reads them individually
+// FIX: spell each digit as a word so Alice cannot read them as a number
 function sayDigits(digits) {
-  const onlyDigits = String(digits || '').replace(/\D/g, '').split('').join('. ');
-  return `<Say voice="alice">${onlyDigits}</Say>`;
+  const words = { '0':'zero','1':'one','2':'two','3':'three','4':'four','5':'five','6':'six','7':'seven','8':'eight','9':'nine' };
+  const spelled = String(digits || '').replace(/\D/g, '').split('').map(d => words[d]).join(', ');
+  return `<Say voice="alice">${spelled}</Say>`;
 }
 
 // FIX: convert "10:00 to 10:30" → "10 to 10 30" so Alice doesn't read thousands
@@ -770,8 +771,7 @@ app.post('/getAddressForAppointment', (req, res) => {
     ${pause(1)}
     ${say(`I have your name as ${name}, phone number`)}
     ${sayDigits(phone)}
-    ${say("zip code")}
-    ${sayDigits(zip)}
+    ${say("zip code")} ${sayDigits(zip)}
     ${say("service address")} ${sayAddress(address)} ${say(`and your ${machine} has ${issue}.`)}
     ${pause(1)}
     ${say(`The available appointment is ${readableDate} between ${sayTime(serviceWindow)}.`)}
