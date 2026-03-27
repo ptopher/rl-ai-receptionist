@@ -109,6 +109,19 @@ function digitsToWords(value) {
     .join(', ');
 }
 
+function formatAddressForSpeech(address) {
+  const parts = String(address || '').split(/(\s+)/);
+
+  return parts
+    .map((part) => {
+      if (/^\d[\d-]*$/.test(part)) {
+        return digitsToWords(part);
+      }
+      return part;
+    })
+    .join('');
+}
+
 function loadJobs() {
   if (!fs.existsSync(JOBS_FILE)) return [];
   try {
@@ -756,13 +769,14 @@ app.post('/getAddressForAppointment', (req, res) => {
   }
 
   const readableDate = getReadableDate(serviceDate);
+  const spokenAddress = formatAddressForSpeech(address);
 
   res.send(`
 <Response>
   <Gather input="speech" action="/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Let me confirm everything.")}
     ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${address}, and your ${machine} has ${issue}.`)}
+    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
     ${pause(1)}
     ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
     ${pause(1)}
@@ -916,12 +930,14 @@ app.post('/getAddressForMessage', (req, res) => {
     return;
   }
 
+  const spokenAddress = formatAddressForSpeech(address);
+
   res.send(`
 <Response>
   <Gather input="speech" action="/finalConfirmMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Let me confirm everything.")}
     ${pause(1)}
-    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${address}, and your ${machine} has ${issue}.`)}
+    ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
     ${pause(1)}
     ${say("Does that all sound correct?")}
   </Gather>
