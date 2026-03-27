@@ -256,23 +256,83 @@ function normalizeNameText(name) {
 }
 
 function normalizeEmailSpeech(text) {
-  let email = String(text || '').toLowerCase().trim();
+  let email = String(text || '').trim().toLowerCase();
 
-  email = email.replace(/\s+at\s+/g, '@');
-  email = email.replace(/\sat\s/g, '@');
-  email = email.replace(/\s+dot\s+/g, '.');
-  email = email.replace(/\sdot\s/g, '.');
-  email = email.replace(/\s+underscore\s+/g, '_');
-  email = email.replace(/\sunderscore\s/g, '_');
-  email = email.replace(/\s+dash\s+/g, '-');
-  email = email.replace(/\sdash\s/g, '-');
-  email = email.replace(/\s+hyphen\s+/g, '-');
-  email = email.replace(/\shyphen\s/g, '-');
-  email = email.replace(/\s+plus\s+/g, '+');
-  email = email.replace(/\splus\s/g, '+');
-  email = email.replace(/\s/g, '');
+  email = email.replace(/[,"']/g, ' ');
+  email = email.replace(/\b(my email is|email is|email address is|my email address is|it is|it's|its)\b/g, ' ');
+  email = email.replace(/\bplease send it to\b/g, ' ');
+  email = email.replace(/\bat sign\b/g, ' @ ');
+  email = email.replace(/\bat the rate\b/g, ' @ ');
+  email = email.replace(/\bat\b/g, ' @ ');
+  email = email.replace(/\bdot\b/g, ' . ');
+  email = email.replace(/\bperiod\b/g, ' . ');
+  email = email.replace(/\bunderscore\b/g, ' _ ');
+  email = email.replace(/\bunderscore sign\b/g, ' _ ');
+  email = email.replace(/\bhyphen\b/g, ' - ');
+  email = email.replace(/\bdash\b/g, ' - ');
+  email = email.replace(/\bminus\b/g, ' - ');
+  email = email.replace(/\bplus\b/g, ' + ');
+
+  email = email.replace(/\bg mail\b/g, ' gmail ');
+  email = email.replace(/\byahoo mail\b/g, ' yahoo ');
+  email = email.replace(/\bout look\b/g, ' outlook ');
+  email = email.replace(/\bhot mail\b/g, ' hotmail ');
+  email = email.replace(/\bi cloud\b/g, ' icloud ');
+
+  const digitMap = {
+    zero: '0',
+    one: '1',
+    two: '2',
+    to: '2',
+    too: '2',
+    three: '3',
+    four: '4',
+    for: '4',
+    five: '5',
+    six: '6',
+    seven: '7',
+    eight: '8',
+    ate: '8',
+    nine: '9'
+  };
+
+  const tokens = email.split(/\s+/).filter(Boolean);
+  const convertedTokens = tokens.map((token) => {
+    if (digitMap[token]) {
+      return digitMap[token];
+    }
+    return token;
+  });
+
+  email = convertedTokens.join(' ');
+
+  email = email.replace(/\s*@\s*/g, '@');
+  email = email.replace(/\s*\.\s*/g, '.');
+  email = email.replace(/\s*_\s*/g, '_');
+  email = email.replace(/\s*-\s*/g, '-');
+  email = email.replace(/\s*\+\s*/g, '+');
+  email = email.replace(/\s+/g, '');
 
   return email;
+}
+
+function extractEmailFromSpeech(req) {
+  const raw = String(req.body.SpeechResult || '').trim();
+  if (!raw) return '';
+
+  let email = normalizeEmailSpeech(raw);
+
+  if (isLikelyEmail(email)) {
+    return email;
+  }
+
+  email = email.replace(/[^a-z0-9@._+\-]/g, '');
+
+  if (isLikelyEmail(email)) {
+    return email;
+  }
+
+  return '';
 }
 
 function formatEmailForSpeech(email) {
@@ -1425,15 +1485,15 @@ app.post('/getEmailForAppointment', (req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
   const address = req.query.address || '';
-  const email = normalizeEmailSpeech(req.body.SpeechResult || '');
+  const email = extractEmailFromSpeech(req);
 
   res.type('text/xml');
 
   if (!isLikelyEmail(email)) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("I did not get a valid email address. Please say it again, for example, name at gmail dot com.")}
+  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="15">
+    ${say("I did not get a valid email address. Please say it slowly, for example, c t eight eight eight nine one at gmail dot com.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
@@ -1477,8 +1537,8 @@ app.post('/confirmAppointmentEmail', async (req, res) => {
   if (!accepted) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Okay. Please say the email address again.")}
+  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="15">
+    ${say("Okay. Please say the email address again, slowly.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
@@ -1565,8 +1625,8 @@ app.post('/finalConfirmAppointment', async (req, res) => {
 
   res.send(`
 <Response>
-  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Great. What email address would you like us to use for your appointment confirmation?")}
+  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="15">
+    ${say("Great. What email address would you like us to use for your appointment confirmation? Please say it slowly.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
