@@ -201,7 +201,7 @@ function normalizeStreetSuffixWord(word) {
     boulevard: 'Boulevard',
     dr: 'Dr',
     drive: 'Drive',
-    ct: 'Ct',
+    ct: 'Court',
     court: 'Court',
     ln: 'Ln',
     lane: 'Lane',
@@ -218,37 +218,53 @@ function normalizeStreetSuffixWord(word) {
   return streetMap[lower] || null;
 }
 
-function cleanAddressPunctuation(text) {
-  return String(text || '')
-    .replace(/[?!"“”]/g, '')
-    .replace(/\s*,\s*/g, ', ')
-    .replace(/\s*\.\s*/g, '. ')
-    .replace(/,+/g, ',')
-    .replace(/\.+/g, '.')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-}
-
 function normalizeAddressText(address) {
-  const corrected = applyLocalCorrections(address);
-  const punctuationCleaned = cleanAddressPunctuation(corrected);
-  const tokens = punctuationCleaned.split(/\s+/);
+  let corrected = applyLocalCorrections(address);
 
-  const normalized = tokens.map((token) => {
-    const stripped = token.replace(/[,.]/g, '');
-    const trailingComma = token.endsWith(',') ? ',' : '';
-    const trailingPeriod = token.endsWith('.') ? '.' : '';
+  corrected = corrected
+    .replace(/[?!"“”]/g, ' ')
+    .replace(/[;:]/g, ' ')
+    .replace(/\s*,\s*/g, ' ')
+    .replace(/\s*\.\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-    if (/^\d[\d-]*$/.test(stripped)) {
-      return `${stripped}${trailingComma}${trailingPeriod}`;
+  const cityStateWords = new Set([
+    'severn',
+    'odenton',
+    'laurel',
+    'bowie',
+    'crofton',
+    'gambrills',
+    'millersville',
+    'pasadena',
+    'annapolis',
+    'columbia',
+    'maryland',
+    'md'
+  ]);
+
+  const tokens = corrected.split(/\s+/);
+  const rebuilt = [];
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const rawToken = tokens[i];
+    const token = rawToken.replace(/[,.]/g, '');
+
+    if (!token) continue;
+
+    if (/^\d[\d-]*$/.test(token)) {
+      rebuilt.push(token);
+      continue;
     }
 
-    const suffix = normalizeStreetSuffixWord(stripped);
+    const suffix = normalizeStreetSuffixWord(token);
     if (suffix) {
-      return `${suffix}${trailingComma}${trailingPeriod}`;
+      rebuilt.push(suffix);
+      continue;
     }
 
-    const rebuilt = stripped
+    const normalizedWord = token
       .split('-')
       .map((piece) => {
         if (!piece) return piece;
@@ -256,10 +272,56 @@ function normalizeAddressText(address) {
       })
       .join('-');
 
-    return `${rebuilt}${trailingComma}${trailingPeriod}`;
-  });
+    rebuilt.push(normalizedWord);
+  }
 
-  return normalized.join(' ').replace(/\s{2,}/g, ' ').trim();
+  const streetSuffixes = new Set([
+    'Street', 'Road', 'Avenue', 'Boulevard', 'Drive', 'Court', 'Lane',
+    'Place', 'Circle', 'Terrace', 'Parkway', 'St', 'Rd', 'Ave', 'Blvd',
+    'Dr', 'Ln', 'Pl', 'Cir', 'Ter', 'Pkwy'
+  ]);
+
+  let firstCityIndex = -1;
+  for (let i = 0; i < rebuilt.length; i += 1) {
+    const lower = rebuilt[i].toLowerCase();
+    if (cityStateWords.has(lower)) {
+      firstCityIndex = i;
+      break;
+    }
+  }
+
+  let finalParts = [];
+
+  if (firstCityIndex === -1) {
+    finalParts = rebuilt;
+  } else {
+    const streetParts = rebuilt.slice(0, firstCityIndex);
+    const cityStateParts = rebuilt.slice(firstCityIndex);
+
+    const cleanedStreet = [];
+    for (let i = 0; i < streetParts.length; i += 1) {
+      const current = streetParts[i];
+      const currentLower = current.toLowerCase();
+
+      if (
+        currentLower === 'old' &&
+        i + 2 < streetParts.length &&
+        streetParts[i + 2] === 'Court'
+      ) {
+        cleanedStreet.push('Old');
+        cleanedStreet.push(streetParts[i + 1]);
+        cleanedStreet.push('Court');
+        i += 2;
+        continue;
+      }
+
+      cleanedStreet.push(current);
+    }
+
+    finalParts = [...cleanedStreet, ...cityStateParts];
+  }
+
+  return finalParts.join(' ').replace(/\s{2,}/g, ' ').trim();
 }
 
 function normalizeNameText(name) {
@@ -367,19 +429,6 @@ function formatEmailForSpeech(email) {
 
 function isLikelyEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
-}
-
-function getLocalTimestamp() {
-  return new Date().toLocaleString('en-US', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: true
-  });
 }
 
 function buildAppointmentConfirmationTwiml({
@@ -1700,7 +1749,7 @@ app.post('/confirmAppointmentEmail', async (req, res) => {
     serviceDay,
     serviceCounty,
     serviceWindow,
-    time: getLocalTimestamp()
+    time: new Date().toLocaleString()
   };
 
   saveJob(job);
@@ -2121,7 +2170,7 @@ app.post('/finalConfirmMessage', (req, res) => {
     problem: issue,
     phone,
     address,
-    time: getLocalTimestamp()
+    time: new Date().toLocaleString()
   };
 
   saveJob(job);
@@ -2146,7 +2195,7 @@ app.post('/voicemail', (req, res) => {
     zip: req.query.zip || 'Unknown',
     serviceCounty: matchedCounties.join(', '),
     recording: req.body.RecordingUrl || '',
-    time: getLocalTimestamp()
+    time: new Date().toLocaleString()
   };
 
   saveJob(job);
