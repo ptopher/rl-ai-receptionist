@@ -59,6 +59,8 @@ const exactPhraseCorrections = [
   ['seven maryland', 'severn maryland'],
   ['7 maryland', 'severn maryland'],
   ['severn marylin', 'severn maryland'],
+  ['stubborn maryland', 'severn maryland'],
+  ['stubbern maryland', 'severn maryland'],
   ['odenton marylin', 'odenton maryland'],
   ['glen bernie', 'glen burnie'],
   ['glen berny', 'glen burnie'],
@@ -89,6 +91,8 @@ const wordCorrections = {
   bevern: 'severn',
   sevenn: 'severn',
   severnn: 'severn',
+  stubborn: 'severn',
+  stubbern: 'severn',
   glenn: 'glen',
   bernie: 'burnie',
   berny: 'burnie',
@@ -221,7 +225,10 @@ function normalizeAddressText(address) {
     .replace(/\s+/g, ' ')
     .trim();
 
-  corrected = corrected.replace(/\b7\s+Maryland\b/gi, 'Severn Maryland');
+  corrected = corrected
+    .replace(/\b7\s+Maryland\b/gi, 'Severn Maryland')
+    .replace(/\bStubborn\s+Maryland\b/gi, 'Severn Maryland')
+    .replace(/\bStubbern\s+Maryland\b/gi, 'Severn Maryland');
 
   const cityStateWords = new Set([
     'severn',
@@ -310,6 +317,16 @@ function normalizeAddressText(address) {
   }
 
   return finalParts.join(' ').replace(/\s{2,}/g, ' ').trim();
+}
+
+function stripTrailingLocationBits(address) {
+  return String(address || '')
+    .replace(/\s+[A-Za-z]+(?:\s+[A-Za-z]+){0,2}\s+(?:Maryland|MD)\s+\d{4,5}\s*$/i, '')
+    .replace(/\s+(?:Maryland|MD)\s+\d{4,5}\s*$/i, '')
+    .replace(/\s+[A-Za-z]+(?:\s+[A-Za-z]+){0,2}\s+(?:Maryland|MD)\s*$/i, '')
+    .replace(/\s+(?:Maryland|MD)\s*$/i, '')
+    .replace(/\s+\d{4,5}\s*$/i, '')
+    .trim();
 }
 
 function normalizeIssueText(text) {
@@ -877,6 +894,7 @@ function buildEmailConfirmationTwiml(req, {
 
 // ===== ZIP COORDINATES + DISTANCE =====
 const zipCoordCache = {};
+const zipPlaceCache = {};
 
 async function getZipCoordinates(zip) {
   if (!zip) return null;
@@ -908,6 +926,55 @@ async function getZipCoordinates(zip) {
     console.error('ZIP lookup error:', error);
     return null;
   }
+}
+
+async function getZipPlaceInfo(zip) {
+  if (!zip) return null;
+  if (zipPlaceCache[zip]) return zipPlaceCache[zip];
+
+  try {
+    if (typeof fetch !== 'function') {
+      console.error('Global fetch is not available in this Node runtime.');
+      return null;
+    }
+
+    const response = await fetch(`https://api.zippopotam.us/us/${zip}`);
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    const place = data?.places?.[0];
+    if (!place) return null;
+
+    const info = {
+      city: String(place['place name'] || '').trim(),
+      state: String(place.state || '').trim(),
+      stateAbbreviation: String(place['state abbreviation'] || '').trim()
+    };
+
+    zipPlaceCache[zip] = info;
+    return info;
+  } catch (error) {
+    console.error('ZIP place lookup error:', error);
+    return null;
+  }
+}
+
+async function normalizeAddressForKnownZip(rawAddress, expectedZip) {
+  const normalized = normalizeAddressText(rawAddress || '');
+
+  if (!expectedZip) {
+    return normalized;
+  }
+
+  const streetOnly = stripTrailingLocationBits(normalized) || normalized.replace(/\s+\d{4,5}\s*$/, '').trim();
+  const place = await getZipPlaceInfo(expectedZip);
+
+  if (!place || !place.city) {
+    return `${streetOnly} ${expectedZip}`.replace(/\s+/g, ' ').trim();
+  }
+
+  const fullState = place.state || 'Maryland';
+  return `${streetOnly} ${place.city} ${fullState} ${expectedZip}`.replace(/\s+/g, ' ').trim();
 }
 
 function haversineMiles(lat1, lon1, lat2, lon2) {
@@ -1617,7 +1684,7 @@ app.post('/confirmPhoneForAppointment', wrapRoute((req, res) => {
 }));
 
 // ===== STEP 5C: APPOINTMENT ADDRESS =====
-app.post('/getAddressForAppointment', wrapRoute((req, res) => {
+app.post('/getAddressForAppointment', wrapRoute(async (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1627,7 +1694,8 @@ app.post('/getAddressForAppointment', wrapRoute((req, res) => {
   const serviceWindow = req.query.serviceWindow || '';
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
-  const address = extractAddressFromSpeech(req);
+  const rawAddress = String(req.body.SpeechResult || '').trim();
+  const address = await normalizeAddressForKnownZip(rawAddress, zip);
 
   const sameAddressUrl = absoluteUrl(
     req,
@@ -1830,7 +1898,7 @@ app.post('/correctAppointmentName', wrapRoute((req, res) => {
   );
 }));
 
-app.post('/correctAppointmentAddress', wrapRoute((req, res) => {
+app.post('/correctAppointmentAddress', wrapRoute(async (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1840,7 +1908,8 @@ app.post('/correctAppointmentAddress', wrapRoute((req, res) => {
   const serviceWindow = req.query.serviceWindow || '';
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
-  const address = extractAddressFromSpeech(req);
+  const rawAddress = String(req.body.SpeechResult || '').trim();
+  const address = await normalizeAddressForKnownZip(rawAddress, zip);
 
   const sameUrl = absoluteUrl(
     req,
