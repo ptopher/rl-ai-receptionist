@@ -581,7 +581,6 @@ function detectCorrectionField(text) {
   return '';
 }
 
-// ===== ABSOLUTE URL HELPERS =====
 function getBaseUrl(req) {
   const protoHeader = req.headers['x-forwarded-proto'];
   const protocol = protoHeader ? protoHeader.split(',')[0] : req.protocol;
@@ -590,6 +589,109 @@ function getBaseUrl(req) {
 
 function absoluteUrl(req, path) {
   return `${getBaseUrl(req)}${path}`;
+}
+
+function buildAppointmentConfirmationTwiml(req, {
+  machine,
+  issue,
+  zip,
+  serviceDate,
+  serviceDay,
+  serviceCounty,
+  serviceWindow,
+  name,
+  phone,
+  address
+}) {
+  const readableDate = getReadableDate(serviceDate);
+  const spokenAddress = formatAddressForSpeech(address);
+  const actionUrl = absoluteUrl(
+    req,
+    `/finalConfirmAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+  );
+
+  return `
+<Response>
+  ${say("Let me confirm everything.")}
+  ${pause(1)}
+  ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+  ${pause(1)}
+  ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
+  ${pause(1)}
+  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Does that all sound correct? Please say yes or no.")}
+  </Gather>
+  ${say("I did not catch that.")}
+  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say yes if everything is correct, or say no if something needs to be fixed.")}
+  </Gather>
+  ${say("I still did not hear anything. Goodbye.")}
+</Response>
+`.trim();
+}
+
+function buildMessageConfirmationTwiml(req, {
+  machine,
+  issue,
+  name,
+  phone,
+  address
+}) {
+  const spokenAddress = formatAddressForSpeech(address);
+  const actionUrl = absoluteUrl(
+    req,
+    `/finalConfirmMessage?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+  );
+
+  return `
+<Response>
+  ${say("Let me confirm everything.")}
+  ${pause(1)}
+  ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
+  ${pause(1)}
+  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Does that all sound correct? Please say yes or no.")}
+  </Gather>
+  ${say("I did not catch that.")}
+  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say yes if everything is correct, or say no if something needs to be fixed.")}
+  </Gather>
+  ${say("I still did not hear anything. Goodbye.")}
+</Response>
+`.trim();
+}
+
+function buildEmailConfirmationTwiml(req, {
+  machine,
+  issue,
+  zip,
+  serviceDate,
+  serviceDay,
+  serviceCounty,
+  serviceWindow,
+  name,
+  phone,
+  address,
+  email
+}) {
+  const actionUrl = absoluteUrl(
+    req,
+    `/confirmAppointmentEmail?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}&email=${encodeURIComponent(email)}`
+  );
+
+  return `
+<Response>
+  ${say(`I heard ${formatEmailForSpeech(email)}.`)}
+  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Is that correct? Please say yes or no.")}
+  </Gather>
+  ${say("I did not catch that.")}
+  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say yes if the email is correct, or say no to say it again.")}
+  </Gather>
+  ${say("I still did not hear anything. Goodbye.")}
+</Response>
+`.trim();
 }
 
 // ===== ZIP COORDINATES + DISTANCE =====
@@ -1056,13 +1158,17 @@ app.post('/getZipForAppointment', async (req, res) => {
   }
 
   const optionsSpeech = buildOptionSpeech(slots);
+  const selectUrl = absoluteUrl(
+    req,
+    `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=1`
+  );
 
   res.send(`
 <Response>
   ${say(`Thanks. ${digitsToWords(zip)} is in our service area.`)}
   ${pause(1)}
   ${say(optionsSpeech)}
-  <Gather input="speech dtmf" numDigits="1" action="/selectAppointmentOption?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;startOffset=1" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(selectUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Press or say option 1, 2, or 3. You can also say next week or two weeks out.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1087,10 +1193,15 @@ app.post('/selectAppointmentOption', async (req, res) => {
     const futureSlots = await findAvailableSlots(zip, futureOffset, 3);
 
     if (!futureSlots.length) {
+      const retryUrl = absoluteUrl(
+        req,
+        `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=${encodeURIComponent(currentStartOffset)}`
+      );
+
       res.send(`
 <Response>
   ${say("I could not find appointments in that time frame.")}
-  <Gather input="speech dtmf" numDigits="1" action="/selectAppointmentOption?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;startOffset=${encodeURIComponent(currentStartOffset)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Please say or press option 1, 2, or 3.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1100,11 +1211,15 @@ app.post('/selectAppointmentOption', async (req, res) => {
     }
 
     const futureSpeech = buildOptionSpeech(futureSlots);
+    const futureUrl = absoluteUrl(
+      req,
+      `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=${encodeURIComponent(futureOffset)}`
+    );
 
     res.send(`
 <Response>
   ${say(futureSpeech)}
-  <Gather input="speech dtmf" numDigits="1" action="/selectAppointmentOption?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;startOffset=${encodeURIComponent(futureOffset)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(futureUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Press or say option 1, 2, or 3.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1116,11 +1231,15 @@ app.post('/selectAppointmentOption', async (req, res) => {
   if (!selectedOption) {
     const currentSlots = await findAvailableSlots(zip, currentStartOffset, 3);
     const currentSpeech = currentSlots.length ? buildOptionSpeech(currentSlots) : '';
+    const retryUrl = absoluteUrl(
+      req,
+      `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=${encodeURIComponent(currentStartOffset)}`
+    );
 
     res.send(`
 <Response>
   ${currentSpeech ? say(currentSpeech) : ''}
-  <Gather input="speech dtmf" numDigits="1" action="/selectAppointmentOption?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;startOffset=${encodeURIComponent(currentStartOffset)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("I did not understand. Please say or press option 1, 2, or 3.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1133,10 +1252,15 @@ app.post('/selectAppointmentOption', async (req, res) => {
   const chosenSlot = currentSlots[selectedOption - 1];
 
   if (!chosenSlot) {
+    const retryUrl = absoluteUrl(
+      req,
+      `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=${encodeURIComponent(currentStartOffset)}`
+    );
+
     res.send(`
 <Response>
   ${say("That option is not available.")}
-  <Gather input="speech dtmf" numDigits="1" action="/selectAppointmentOption?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;startOffset=${encodeURIComponent(currentStartOffset)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Please say or press option 1, 2, or 3.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1145,11 +1269,16 @@ app.post('/selectAppointmentOption', async (req, res) => {
     return;
   }
 
+  const nameUrl = absoluteUrl(
+    req,
+    `/getNameForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(chosenSlot.serviceDate)}&serviceDay=${encodeURIComponent(chosenSlot.serviceDay)}&serviceCounty=${encodeURIComponent(chosenSlot.serviceCounty)}&serviceWindow=${encodeURIComponent(chosenSlot.serviceWindow)}`
+  );
+
   res.send(`
 <Response>
   ${say(`Great. You selected ${chosenSlot.readableDate}, between ${chosenSlot.serviceWindow}.`)}
   ${pause(1)}
-  <Gather input="speech" action="/getNameForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(chosenSlot.serviceDate)}&amp;serviceDay=${encodeURIComponent(chosenSlot.serviceDay)}&amp;serviceCounty=${encodeURIComponent(chosenSlot.serviceCounty)}&amp;serviceWindow=${encodeURIComponent(chosenSlot.serviceWindow)}" method="POST" speechTimeout="4" timeout="10">
+  <Gather input="speech" action="${xmlEscape(nameUrl)}" method="POST" speechTimeout="4" timeout="10">
     ${say("Can I get your first and last name, please?")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1168,12 +1297,17 @@ app.post('/getNameForAppointment', (req, res) => {
   const serviceWindow = req.query.serviceWindow || '';
   const name = normalizeNameText(req.body.SpeechResult);
 
+  const phoneUrl = absoluteUrl(
+    req,
+    `/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}`
+  );
+
   res.type('text/xml');
   res.send(`
 <Response>
   ${say(`Thanks, ${name}.`)}
   ${pause(1)}
-  <Gather input="speech dtmf" numDigits="10" action="/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(phoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("What is the best phone number to reach you at?")}
   </Gather>
   ${say("We did not receive your phone number. Goodbye.")}
@@ -1193,12 +1327,22 @@ app.post('/getPhoneForAppointment', (req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = extractPhoneFromRequest(req);
 
+  const samePhoneUrl = absoluteUrl(
+    req,
+    `/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}`
+  );
+
+  const addressUrl = absoluteUrl(
+    req,
+    `/getAddressForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}`
+  );
+
   res.type('text/xml');
 
   if (!phone || phone.length < 10) {
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(samePhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("I did not get the phone number. Please say it again or enter it using your keypad.")}
   </Gather>
   ${say("We did not receive your phone number. Goodbye.")}
@@ -1211,7 +1355,7 @@ app.post('/getPhoneForAppointment', (req, res) => {
 <Response>
   ${say("Thanks.")}
   ${pause(1)}
-  <Gather input="speech" action="/getAddressForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(addressUrl)}" method="POST" speechTimeout="5" timeout="15">
     ${say("What is the service address? Please say the full street address.")}
   </Gather>
   ${say("We did not hear the address. Goodbye.")}
@@ -1232,12 +1376,17 @@ app.post('/getAddressForAppointment', (req, res) => {
   const phone = req.query.phone || '';
   const address = extractAddressFromSpeech(req);
 
+  const sameAddressUrl = absoluteUrl(
+    req,
+    `/getAddressForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}`
+  );
+
   res.type('text/xml');
 
   if (!address || address.length < 5) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/getAddressForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(sameAddressUrl)}" method="POST" speechTimeout="5" timeout="15">
     ${say("I did not get the address. Please say the full service address again.")}
   </Gather>
   ${say("We still did not get the address. Goodbye.")}
@@ -1246,9 +1395,8 @@ app.post('/getAddressForAppointment', (req, res) => {
     return;
   }
 
-  res.type('text/xml');
   res.send(
-    buildAppointmentConfirmationTwiml({
+    buildAppointmentConfirmationTwiml(req, {
       machine,
       issue,
       zip,
@@ -1280,9 +1428,14 @@ app.post('/appointmentCorrectionChoice', (req, res) => {
   res.type('text/xml');
 
   if (!correctionField) {
+    const retryUrl = absoluteUrl(
+      req,
+      `/appointmentCorrectionChoice?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+    );
+
     res.send(`
 <Response>
-  <Gather input="speech" action="/appointmentCorrectionChoice?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Please tell me what needs to be corrected. You can say name, phone number, address, machine, issue, or appointment.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1292,9 +1445,14 @@ app.post('/appointmentCorrectionChoice', (req, res) => {
   }
 
   if (correctionField === 'name') {
+    const url = absoluteUrl(
+      req,
+      `/correctAppointmentName?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+    );
+
     res.send(`
 <Response>
-  <Gather input="speech" action="/correctAppointmentName?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="4" timeout="10">
+  <Gather input="speech" action="${xmlEscape(url)}" method="POST" speechTimeout="4" timeout="10">
     ${say("Please say the correct first and last name.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1304,9 +1462,14 @@ app.post('/appointmentCorrectionChoice', (req, res) => {
   }
 
   if (correctionField === 'phone') {
+    const url = absoluteUrl(
+      req,
+      `/correctAppointmentPhone?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&address=${encodeURIComponent(address)}`
+    );
+
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="/correctAppointmentPhone?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Please say or enter the correct phone number.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1316,9 +1479,14 @@ app.post('/appointmentCorrectionChoice', (req, res) => {
   }
 
   if (correctionField === 'address') {
+    const url = absoluteUrl(
+      req,
+      `/correctAppointmentAddress?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}`
+    );
+
     res.send(`
 <Response>
-  <Gather input="speech" action="/correctAppointmentAddress?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(url)}" method="POST" speechTimeout="5" timeout="15">
     ${say("Please say the correct service address.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1328,9 +1496,14 @@ app.post('/appointmentCorrectionChoice', (req, res) => {
   }
 
   if (correctionField === 'machine') {
+    const url = absoluteUrl(
+      req,
+      `/correctAppointmentMachine?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+    );
+
     res.send(`
 <Response>
-  <Gather input="speech" action="/correctAppointmentMachine?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Please say the correct machine.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1340,9 +1513,14 @@ app.post('/appointmentCorrectionChoice', (req, res) => {
   }
 
   if (correctionField === 'issue') {
+    const url = absoluteUrl(
+      req,
+      `/correctAppointmentIssue?machine=${encodeURIComponent(machine)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+    );
+
     res.send(`
 <Response>
-  <Gather input="speech" action="/correctAppointmentIssue?machine=${encodeURIComponent(machine)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Please say the correct issue.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1352,10 +1530,15 @@ app.post('/appointmentCorrectionChoice', (req, res) => {
   }
 
   if (correctionField === 'appointment') {
+    const url = absoluteUrl(
+      req,
+      `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=1&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+    );
+
     res.send(`
 <Response>
   ${say("No problem. Let's choose a different appointment.")}
-  <Gather input="speech dtmf" numDigits="1" action="/selectAppointmentOption?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;startOffset=1&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Press or say option 1, 2, or 3. You can also say next week or two weeks out.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1379,7 +1562,7 @@ app.post('/correctAppointmentName', (req, res) => {
 
   res.type('text/xml');
   res.send(
-    buildAppointmentConfirmationTwiml({
+    buildAppointmentConfirmationTwiml(req, {
       machine,
       issue,
       zip,
@@ -1406,12 +1589,17 @@ app.post('/correctAppointmentPhone', (req, res) => {
   const address = req.query.address || '';
   const phone = extractPhoneFromRequest(req);
 
+  const sameUrl = absoluteUrl(
+    req,
+    `/correctAppointmentPhone?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&address=${encodeURIComponent(address)}`
+  );
+
   res.type('text/xml');
 
   if (!phone || phone.length < 10) {
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="/correctAppointmentPhone?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(sameUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("I did not get the correct phone number. Please say it again or enter it using your keypad.")}
   </Gather>
   ${say("We did not hear anything. Goodbye.")}
@@ -1420,9 +1608,8 @@ app.post('/correctAppointmentPhone', (req, res) => {
     return;
   }
 
-  res.type('text/xml');
   res.send(
-    buildAppointmentConfirmationTwiml({
+    buildAppointmentConfirmationTwiml(req, {
       machine,
       issue,
       zip,
@@ -1449,12 +1636,17 @@ app.post('/correctAppointmentAddress', (req, res) => {
   const phone = req.query.phone || '';
   const address = extractAddressFromSpeech(req);
 
+  const sameUrl = absoluteUrl(
+    req,
+    `/correctAppointmentAddress?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}`
+  );
+
   res.type('text/xml');
 
   if (!address || address.length < 5) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/correctAppointmentAddress?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(sameUrl)}" method="POST" speechTimeout="5" timeout="15">
     ${say("I did not get the correct address. Please say the full service address again.")}
   </Gather>
   ${say("We did not hear anything. Goodbye.")}
@@ -1463,9 +1655,8 @@ app.post('/correctAppointmentAddress', (req, res) => {
     return;
   }
 
-  res.type('text/xml');
   res.send(
-    buildAppointmentConfirmationTwiml({
+    buildAppointmentConfirmationTwiml(req, {
       machine,
       issue,
       zip,
@@ -1493,13 +1684,17 @@ app.post('/correctAppointmentMachine', (req, res) => {
   const address = req.query.address || '';
 
   const machine = detectMachine(req.body.SpeechResult || '');
+  const sameUrl = absoluteUrl(
+    req,
+    `/correctAppointmentMachine?machine=${encodeURIComponent(currentMachine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+  );
 
   res.type('text/xml');
 
   if (!machine) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/correctAppointmentMachine?machine=${encodeURIComponent(currentMachine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech" action="${xmlEscape(sameUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("I did not get the correct machine. Please say the machine again.")}
   </Gather>
   ${say("We did not hear anything. Goodbye.")}
@@ -1508,9 +1703,8 @@ app.post('/correctAppointmentMachine', (req, res) => {
     return;
   }
 
-  res.type('text/xml');
   res.send(
-    buildAppointmentConfirmationTwiml({
+    buildAppointmentConfirmationTwiml(req, {
       machine,
       issue,
       zip,
@@ -1539,7 +1733,7 @@ app.post('/correctAppointmentIssue', (req, res) => {
 
   res.type('text/xml');
   res.send(
-    buildAppointmentConfirmationTwiml({
+    buildAppointmentConfirmationTwiml(req, {
       machine,
       issue,
       zip,
@@ -1568,12 +1762,17 @@ app.post('/getEmailForAppointment', (req, res) => {
   const address = req.query.address || '';
   const email = extractEmailFromSpeech(req);
 
+  const sameUrl = absoluteUrl(
+    req,
+    `/getEmailForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+  );
+
   res.type('text/xml');
 
   if (!isLikelyEmail(email)) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="15">
+  <Gather input="speech" action="${xmlEscape(sameUrl)}" method="POST" speechTimeout="auto" timeout="15">
     ${say("I did not get a valid email address. Please say it slowly, for example, c t eight eight eight nine one at gmail dot com.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1582,9 +1781,8 @@ app.post('/getEmailForAppointment', (req, res) => {
     return;
   }
 
-  res.type('text/xml');
   res.send(
-    buildEmailConfirmationTwiml({
+    buildEmailConfirmationTwiml(req, {
       machine,
       issue,
       zip,
@@ -1620,12 +1818,17 @@ app.post('/confirmAppointmentEmail', async (req, res) => {
     decision.includes('that is correct') ||
     decision.includes('sounds correct');
 
+  const retryUrl = absoluteUrl(
+    req,
+    `/getEmailForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+  );
+
   res.type('text/xml');
 
   if (!accepted) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="15">
+  <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="15">
     ${say("Okay. Please say the email address again.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1697,12 +1900,22 @@ app.post('/finalConfirmAppointment', async (req, res) => {
     decision.includes('sounds correct') ||
     decision.includes('that is correct');
 
+  const correctionUrl = absoluteUrl(
+    req,
+    `/appointmentCorrectionChoice?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+  );
+
+  const emailUrl = absoluteUrl(
+    req,
+    `/getEmailForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+  );
+
   res.type('text/xml');
 
   if (!accepted) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/appointmentCorrectionChoice?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech" action="${xmlEscape(correctionUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Okay. What needs to be corrected? You can say name, phone number, address, machine, issue, or appointment.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1715,11 +1928,11 @@ app.post('/finalConfirmAppointment', async (req, res) => {
 <Response>
   ${say("Great.")}
   ${pause(1)}
-  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="15">
+  <Gather input="speech" action="${xmlEscape(emailUrl)}" method="POST" speechTimeout="auto" timeout="15">
     ${say("What email address would you like us to use for your appointment confirmation?")}
   </Gather>
   ${say("I did not catch that.")}
-  <Gather input="speech" action="/getEmailForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;zip=${encodeURIComponent(zip)}&amp;serviceDate=${encodeURIComponent(serviceDate)}&amp;serviceDay=${encodeURIComponent(serviceDay)}&amp;serviceCounty=${encodeURIComponent(serviceCounty)}&amp;serviceWindow=${encodeURIComponent(serviceWindow)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="15">
+  <Gather input="speech" action="${xmlEscape(emailUrl)}" method="POST" speechTimeout="auto" timeout="15">
     ${say("Please say the email address you want us to use.")}
   </Gather>
   ${say("I still did not hear anything. Goodbye.")}
@@ -1733,12 +1946,17 @@ app.post('/getNameForMessage', (req, res) => {
   const issue = req.query.issue || 'Unknown';
   const name = normalizeNameText(req.body.SpeechResult);
 
+  const phoneUrl = absoluteUrl(
+    req,
+    `/getPhoneForMessage?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}`
+  );
+
   res.type('text/xml');
   res.send(`
 <Response>
   ${say(`Thanks, ${name}.`)}
   ${pause(1)}
-  <Gather input="speech dtmf" numDigits="10" action="/getPhoneForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(phoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("What is the best phone number to reach you at?")}
   </Gather>
   ${say("We did not receive your phone number. Goodbye.")}
@@ -1752,12 +1970,22 @@ app.post('/getPhoneForMessage', (req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = extractPhoneFromRequest(req);
 
+  const retryUrl = absoluteUrl(
+    req,
+    `/getPhoneForMessage?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}`
+  );
+
+  const addressUrl = absoluteUrl(
+    req,
+    `/getAddressForMessage?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}`
+  );
+
   res.type('text/xml');
 
   if (!phone || phone.length < 10) {
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="/getPhoneForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("I did not get the phone number. Please say it again or enter it using your keypad.")}
   </Gather>
   ${say("We did not receive your phone number. Goodbye.")}
@@ -1770,7 +1998,7 @@ app.post('/getPhoneForMessage', (req, res) => {
 <Response>
   ${say("Thanks.")}
   ${pause(1)}
-  <Gather input="speech" action="/getAddressForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(addressUrl)}" method="POST" speechTimeout="5" timeout="15">
     ${say("What is the service address? Please say the full street address.")}
   </Gather>
   ${say("I did not hear the address. Goodbye.")}
@@ -1785,12 +2013,17 @@ app.post('/getAddressForMessage', (req, res) => {
   const phone = req.query.phone || '';
   const address = extractAddressFromSpeech(req);
 
+  const retryUrl = absoluteUrl(
+    req,
+    `/getAddressForMessage?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}`
+  );
+
   res.type('text/xml');
 
   if (!address || address.length < 5) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/getAddressForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="5" timeout="15">
     ${say("I did not get the address. Please say the full service address again.")}
   </Gather>
   ${say("We still did not get the address. Goodbye.")}
@@ -1799,9 +2032,8 @@ app.post('/getAddressForMessage', (req, res) => {
     return;
   }
 
-  res.type('text/xml');
   res.send(
-    buildMessageConfirmationTwiml({
+    buildMessageConfirmationTwiml(req, {
       machine,
       issue,
       name,
@@ -1823,9 +2055,14 @@ app.post('/messageCorrectionChoice', (req, res) => {
   res.type('text/xml');
 
   if (!correctionField) {
+    const retryUrl = absoluteUrl(
+      req,
+      `/messageCorrectionChoice?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+    );
+
     res.send(`
 <Response>
-  <Gather input="speech" action="/messageCorrectionChoice?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Please tell me what needs to be corrected. You can say name, phone number, address, machine, or issue.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1835,9 +2072,14 @@ app.post('/messageCorrectionChoice', (req, res) => {
   }
 
   if (correctionField === 'name') {
+    const url = absoluteUrl(
+      req,
+      `/correctMessageName?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+    );
+
     res.send(`
 <Response>
-  <Gather input="speech" action="/correctMessageName?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="4" timeout="10">
+  <Gather input="speech" action="${xmlEscape(url)}" method="POST" speechTimeout="4" timeout="10">
     ${say("Please say the correct first and last name.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1847,9 +2089,14 @@ app.post('/messageCorrectionChoice', (req, res) => {
   }
 
   if (correctionField === 'phone') {
+    const url = absoluteUrl(
+      req,
+      `/correctMessagePhone?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&address=${encodeURIComponent(address)}`
+    );
+
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="/correctMessagePhone?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Please say or enter the correct phone number.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1859,9 +2106,14 @@ app.post('/messageCorrectionChoice', (req, res) => {
   }
 
   if (correctionField === 'address') {
+    const url = absoluteUrl(
+      req,
+      `/correctMessageAddress?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}`
+    );
+
     res.send(`
 <Response>
-  <Gather input="speech" action="/correctMessageAddress?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(url)}" method="POST" speechTimeout="5" timeout="15">
     ${say("Please say the correct service address.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1871,9 +2123,14 @@ app.post('/messageCorrectionChoice', (req, res) => {
   }
 
   if (correctionField === 'machine') {
+    const url = absoluteUrl(
+      req,
+      `/correctMessageMachine?issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+    );
+
     res.send(`
 <Response>
-  <Gather input="speech" action="/correctMessageMachine?issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Please say the correct machine.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1883,9 +2140,14 @@ app.post('/messageCorrectionChoice', (req, res) => {
   }
 
   if (correctionField === 'issue') {
+    const url = absoluteUrl(
+      req,
+      `/correctMessageIssue?machine=${encodeURIComponent(machine)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+    );
+
     res.send(`
 <Response>
-  <Gather input="speech" action="/correctMessageIssue?machine=${encodeURIComponent(machine)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Please say the correct issue.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1904,7 +2166,7 @@ app.post('/correctMessageName', (req, res) => {
 
   res.type('text/xml');
   res.send(
-    buildMessageConfirmationTwiml({
+    buildMessageConfirmationTwiml(req, {
       machine,
       issue,
       name,
@@ -1921,12 +2183,17 @@ app.post('/correctMessagePhone', (req, res) => {
   const address = req.query.address || '';
   const phone = extractPhoneFromRequest(req);
 
+  const retryUrl = absoluteUrl(
+    req,
+    `/correctMessagePhone?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&address=${encodeURIComponent(address)}`
+  );
+
   res.type('text/xml');
 
   if (!phone || phone.length < 10) {
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="/correctMessagePhone?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("I did not get the correct phone number. Please say it again or enter it using your keypad.")}
   </Gather>
   ${say("We did not hear anything. Goodbye.")}
@@ -1935,9 +2202,8 @@ app.post('/correctMessagePhone', (req, res) => {
     return;
   }
 
-  res.type('text/xml');
   res.send(
-    buildMessageConfirmationTwiml({
+    buildMessageConfirmationTwiml(req, {
       machine,
       issue,
       name,
@@ -1954,12 +2220,17 @@ app.post('/correctMessageAddress', (req, res) => {
   const phone = req.query.phone || '';
   const address = extractAddressFromSpeech(req);
 
+  const retryUrl = absoluteUrl(
+    req,
+    `/correctMessageAddress?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}`
+  );
+
   res.type('text/xml');
 
   if (!address || address.length < 5) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/correctMessageAddress?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="5" timeout="15">
     ${say("I did not get the correct address. Please say it again.")}
   </Gather>
   ${say("We did not hear anything. Goodbye.")}
@@ -1968,9 +2239,8 @@ app.post('/correctMessageAddress', (req, res) => {
     return;
   }
 
-  res.type('text/xml');
   res.send(
-    buildMessageConfirmationTwiml({
+    buildMessageConfirmationTwiml(req, {
       machine,
       issue,
       name,
@@ -1987,12 +2257,17 @@ app.post('/correctMessageMachine', (req, res) => {
   const address = req.query.address || '';
   const machine = detectMachine(req.body.SpeechResult || '');
 
+  const retryUrl = absoluteUrl(
+    req,
+    `/correctMessageMachine?issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+  );
+
   res.type('text/xml');
 
   if (!machine) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/correctMessageMachine?issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("I did not get the correct machine. Please say it again.")}
   </Gather>
   ${say("We did not hear anything. Goodbye.")}
@@ -2001,9 +2276,8 @@ app.post('/correctMessageMachine', (req, res) => {
     return;
   }
 
-  res.type('text/xml');
   res.send(
-    buildMessageConfirmationTwiml({
+    buildMessageConfirmationTwiml(req, {
       machine,
       issue,
       name,
@@ -2022,7 +2296,7 @@ app.post('/correctMessageIssue', (req, res) => {
 
   res.type('text/xml');
   res.send(
-    buildMessageConfirmationTwiml({
+    buildMessageConfirmationTwiml(req, {
       machine,
       issue,
       name,
@@ -2047,12 +2321,17 @@ app.post('/finalConfirmMessage', (req, res) => {
     decision.includes('sounds correct') ||
     decision.includes('that is correct');
 
+  const correctionUrl = absoluteUrl(
+    req,
+    `/messageCorrectionChoice?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}&address=${encodeURIComponent(address)}`
+  );
+
   res.type('text/xml');
 
   if (!accepted) {
     res.send(`
 <Response>
-  <Gather input="speech" action="/messageCorrectionChoice?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}&amp;name=${encodeURIComponent(name)}&amp;phone=${encodeURIComponent(phone)}&amp;address=${encodeURIComponent(address)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech" action="${xmlEscape(correctionUrl)}" method="POST" speechTimeout="auto" timeout="8">
     ${say("Okay. What needs to be corrected? You can say name, phone number, address, machine, or issue.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
