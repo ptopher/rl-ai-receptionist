@@ -395,14 +395,29 @@ function isAcceptableEmail(email) {
   if (!value) return false;
   if (!/^[a-z0-9@._+\-]+$/.test(value)) return false;
   if (!value.includes('@')) return false;
+
   const parts = value.split('@');
   if (parts.length !== 2) return false;
+
   const local = parts[0];
   const domain = parts[1];
+
   if (!local || local.length < 1) return false;
   if (!domain || domain.length < 2) return false;
-  if (domain.startsWith('.') || domain.endsWith('.')) return false;
+
   return true;
+}
+
+function sanitizeLooseEmail(email) {
+  return String(email || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9@._+\-]/g, '')
+    .replace(/\.{2,}/g, '.')
+    .replace(/@{2,}/g, '@')
+    .replace(/_{2,}/g, '_')
+    .replace(/-{2,}/g, '-')
+    .replace(/\+{2,}/g, '+')
+    .trim();
 }
 
 function extractEmailFromSpeech(req) {
@@ -415,13 +430,18 @@ function extractEmailFromSpeech(req) {
     return email;
   }
 
-  email = email.replace(/[^a-z0-9@._+\-]/g, '');
+  email = sanitizeLooseEmail(email);
 
   if (isStrictEmail(email) || isAcceptableEmail(email)) {
     return email;
   }
 
-  return '';
+  const rawCleaned = sanitizeLooseEmail(normalizeEmailSpeech(raw));
+  if (isStrictEmail(rawCleaned) || isAcceptableEmail(rawCleaned)) {
+    return rawCleaned;
+  }
+
+  return rawCleaned;
 }
 
 function formatEmailForSpeech(email) {
@@ -1875,7 +1895,7 @@ app.post('/getEmailForAppointment', wrapRoute((req, res) => {
 
   res.type('text/xml');
 
-  if (!isAcceptableEmail(email)) {
+  if (!email || !email.includes('@')) {
     res.send(`
 <Response>
   <Gather input="speech" action="${xmlEscape(sameUrl)}" method="POST" speechTimeout="auto" timeout="15">
