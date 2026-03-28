@@ -1,5 +1,6 @@
 const express = require('express');
 const fs = require('fs');
+const nodemailer = require('nodemailer');
 const app = express();
 
 app.use(express.urlencoded({ extended: false }));
@@ -29,6 +30,108 @@ const routingConfig = {
   fridaySaturdayMorningMax: 2,
   fridaySaturdayAfternoonMax: 3
 };
+
+// ===== EMAIL SETTINGS =====
+const emailConfig = {
+  from: process.env.EMAIL_FROM || '',
+  host: process.env.EMAIL_HOST || '',
+  port: parseInt(process.env.EMAIL_PORT || '587', 10),
+  secure: String(process.env.EMAIL_SECURE || 'false').toLowerCase() === 'true',
+  user: process.env.EMAIL_USER || '',
+  pass: process.env.EMAIL_PASS || ''
+};
+
+function canSendEmail() {
+  return Boolean(
+    emailConfig.from &&
+    emailConfig.host &&
+    emailConfig.port &&
+    emailConfig.user &&
+    emailConfig.pass
+  );
+}
+
+let mailTransporter = null;
+
+function getMailTransporter() {
+  if (!canSendEmail()) {
+    return null;
+  }
+
+  if (!mailTransporter) {
+    mailTransporter = nodemailer.createTransport({
+      host: emailConfig.host,
+      port: emailConfig.port,
+      secure: emailConfig.secure,
+      auth: {
+        user: emailConfig.user,
+        pass: emailConfig.pass
+      }
+    });
+  }
+
+  return mailTransporter;
+}
+
+async function sendAppointmentConfirmationEmail({
+  to,
+  name,
+  machine,
+  issue,
+  serviceDate,
+  serviceWindow,
+  address
+}) {
+  const transporter = getMailTransporter();
+
+  if (!transporter) {
+    console.log('Email not sent: transporter not configured');
+    return { sent: false, reason: 'not_configured' };
+  }
+
+  const readableDate = getReadableDate(serviceDate);
+
+  const subject = `RL Small Engines Appointment Confirmation - ${readableDate}`;
+  const textBody = [
+    `Hello ${name || 'Customer'},`,
+    '',
+    'Your appointment with RL Small Engines has been confirmed.',
+    '',
+    `Service: ${machine || 'Unknown'}`,
+    `Issue: ${issue || 'Unknown'}`,
+    `Date: ${readableDate || ''}`,
+    `Time Window: ${serviceWindow || ''}`,
+    `Address: ${address || ''}`,
+    '',
+    'Thank you,',
+    'RL Small Engines'
+  ].join('\n');
+
+  const htmlBody = `
+    <div style="font-family: Arial, sans-serif; color: #111111; line-height: 1.5;">
+      <p>Hello ${xmlEscape(name || 'Customer')},</p>
+      <p>Your appointment with <strong>RL Small Engines</strong> has been confirmed.</p>
+      <p>
+        <strong>Service:</strong> ${xmlEscape(machine || 'Unknown')}<br/>
+        <strong>Issue:</strong> ${xmlEscape(issue || 'Unknown')}<br/>
+        <strong>Date:</strong> ${xmlEscape(readableDate || '')}<br/>
+        <strong>Time Window:</strong> ${xmlEscape(serviceWindow || '')}<br/>
+        <strong>Address:</strong> ${xmlEscape(address || '')}
+      </p>
+      <p>Thank you,<br/>RL Small Engines</p>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from: emailConfig.from,
+    to,
+    subject,
+    text: textBody,
+    html: htmlBody
+  });
+
+  return { sent: true };
+}
 
 // ===== COUNTY ZIP MAPS =====
 const countyZips = {
@@ -2130,6 +2233,20 @@ app.post('/confirmAppointmentEmail', wrapRoute(async (req, res) => {
     if (saved) {
       serviceWindow = saved.serviceWindow || serviceWindow;
     }
+  }
+
+  try {
+    await sendAppointmentConfirmationEmail({
+      to: email,
+      name,
+      machine,
+      issue,
+      serviceDate,
+      serviceWindow,
+      address
+    });
+  } catch (error) {
+    console.error('Appointment email send failed:', error);
   }
 
   const readableDate = getReadableDate(serviceDate);
