@@ -112,15 +112,6 @@ function cleanText(text) {
     .trim();
 }
 
-function titleCase(text) {
-  const cleaned = cleanText(text);
-  if (!cleaned) return 'Unknown';
-  return cleaned
-    .split(' ')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
-
 function xmlEscape(text) {
   return String(text || '')
     .replace(/&/g, '&amp;')
@@ -275,12 +266,6 @@ function normalizeAddressText(address) {
     rebuilt.push(normalizedWord);
   }
 
-  const streetSuffixes = new Set([
-    'Street', 'Road', 'Avenue', 'Boulevard', 'Drive', 'Court', 'Lane',
-    'Place', 'Circle', 'Terrace', 'Parkway', 'St', 'Rd', 'Ave', 'Blvd',
-    'Dr', 'Ln', 'Pl', 'Cir', 'Ter', 'Pkwy'
-  ]);
-
   let firstCityIndex = -1;
   for (let i = 0; i < rebuilt.length; i += 1) {
     const lower = rebuilt[i].toLowerCase();
@@ -429,126 +414,6 @@ function formatEmailForSpeech(email) {
 
 function isLikelyEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
-}
-
-function buildAppointmentConfirmationTwiml({
-  machine,
-  issue,
-  zip,
-  serviceDate,
-  serviceDay,
-  serviceCounty,
-  serviceWindow,
-  name,
-  phone,
-  address
-}) {
-  const readableDate = getReadableDate(serviceDate);
-  const spokenAddress = formatAddressForSpeech(address);
-  const actionUrl =
-    `/finalConfirmAppointment?machine=${encodeURIComponent(machine)}` +
-    `&issue=${encodeURIComponent(issue)}` +
-    `&zip=${encodeURIComponent(zip)}` +
-    `&serviceDate=${encodeURIComponent(serviceDate)}` +
-    `&serviceDay=${encodeURIComponent(serviceDay)}` +
-    `&serviceCounty=${encodeURIComponent(serviceCounty)}` +
-    `&serviceWindow=${encodeURIComponent(serviceWindow)}` +
-    `&name=${encodeURIComponent(name)}` +
-    `&phone=${encodeURIComponent(phone)}` +
-    `&address=${encodeURIComponent(address)}`;
-
-  return `
-<Response>
-  ${say("Let me confirm everything.")}
-  ${pause(1)}
-  ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, zip code ${digitsToWords(zip)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-  ${pause(1)}
-  ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
-  ${pause(1)}
-  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Does that all sound correct? Please say yes or no.")}
-  </Gather>
-  ${say("I did not catch that.")}
-  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Please say yes if everything is correct, or say no if something needs to be fixed.")}
-  </Gather>
-  ${say("I still did not hear anything. Goodbye.")}
-</Response>
-`.trim();
-}
-
-function buildMessageConfirmationTwiml({
-  machine,
-  issue,
-  name,
-  phone,
-  address
-}) {
-  const spokenAddress = formatAddressForSpeech(address);
-  const actionUrl =
-    `/finalConfirmMessage?machine=${encodeURIComponent(machine)}` +
-    `&issue=${encodeURIComponent(issue)}` +
-    `&name=${encodeURIComponent(name)}` +
-    `&phone=${encodeURIComponent(phone)}` +
-    `&address=${encodeURIComponent(address)}`;
-
-  return `
-<Response>
-  ${say("Let me confirm everything.")}
-  ${pause(1)}
-  ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
-  ${pause(1)}
-  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Does that all sound correct? Please say yes or no.")}
-  </Gather>
-  ${say("I did not catch that.")}
-  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Please say yes if everything is correct, or say no if something needs to be fixed.")}
-  </Gather>
-  ${say("I still did not hear anything. Goodbye.")}
-</Response>
-`.trim();
-}
-
-function buildEmailConfirmationTwiml({
-  machine,
-  issue,
-  zip,
-  serviceDate,
-  serviceDay,
-  serviceCounty,
-  serviceWindow,
-  name,
-  phone,
-  address,
-  email
-}) {
-  const actionUrl =
-    `/confirmAppointmentEmail?machine=${encodeURIComponent(machine)}` +
-    `&issue=${encodeURIComponent(issue)}` +
-    `&zip=${encodeURIComponent(zip)}` +
-    `&serviceDate=${encodeURIComponent(serviceDate)}` +
-    `&serviceDay=${encodeURIComponent(serviceDay)}` +
-    `&serviceCounty=${encodeURIComponent(serviceCounty)}` +
-    `&serviceWindow=${encodeURIComponent(serviceWindow)}` +
-    `&name=${encodeURIComponent(name)}` +
-    `&phone=${encodeURIComponent(phone)}` +
-    `&address=${encodeURIComponent(address)}` +
-    `&email=${encodeURIComponent(email)}`;
-
-  return `
-<Response>
-  ${say(`I heard ${formatEmailForSpeech(email)}.`)}
-  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Is that correct? Please say yes or no.")}
-  </Gather>
-  ${say("I did not catch that.")}
-  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Please say yes if the email is correct, or say no to say it again.")}
-  </Gather>
-  ${say("I still did not hear anything. Goodbye.")}
-</Response>
-`.trim();
 }
 
 function loadJobs() {
@@ -714,6 +579,17 @@ function detectCorrectionField(text) {
   if (cleaned.includes('appointment') || cleaned.includes('time') || cleaned.includes('option') || cleaned.includes('date') || cleaned.includes('schedule')) return 'appointment';
 
   return '';
+}
+
+// ===== ABSOLUTE URL HELPERS =====
+function getBaseUrl(req) {
+  const protoHeader = req.headers['x-forwarded-proto'];
+  const protocol = protoHeader ? protoHeader.split(',')[0] : req.protocol;
+  return `${protocol}://${req.get('host')}`;
+}
+
+function absoluteUrl(req, path) {
+  return `${getBaseUrl(req)}${path}`;
 }
 
 // ===== ZIP COORDINATES + DISTANCE =====
@@ -1028,10 +904,12 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
 }
 
 // ===== CALL FLOW START =====
-function buildVoiceTwiml() {
+function buildVoiceTwiml(req) {
+  const helpUrl = absoluteUrl(req, '/getHelpRequest');
+
   return `
 <Response>
-  <Gather input="speech" action="/getHelpRequest" method="POST" speechTimeout="auto" timeout="6">
+  <Gather input="speech" action="${xmlEscape(helpUrl)}" method="POST" speechTimeout="auto" timeout="6">
     ${say("Hello, you have reached R L Small Engines. My name is Emma. How can I help you today?")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1045,12 +923,12 @@ app.get('/', (req, res) => {
 
 app.get('/voice', (req, res) => {
   res.type('text/xml');
-  res.send(buildVoiceTwiml());
+  res.send(buildVoiceTwiml(req));
 });
 
 app.post('/voice', (req, res) => {
   res.type('text/xml');
-  res.send(buildVoiceTwiml());
+  res.send(buildVoiceTwiml(req));
 });
 
 // ===== STEP 1: HELP REQUEST / EXTRACT MACHINE =====
@@ -1058,13 +936,19 @@ app.post('/getHelpRequest', (req, res) => {
   const helpRequest = req.body.SpeechResult || '';
   const detectedMachine = detectMachine(helpRequest);
 
+  const retryUrl = absoluteUrl(req, '/getHelpRequest');
+  const issueUrl = absoluteUrl(
+    req,
+    `/getIssue?machine=${encodeURIComponent(detectedMachine || '')}`
+  );
+
   res.type('text/xml');
 
   if (!detectedMachine) {
     res.send(`
 <Response>
   ${say("Sorry, I could not tell what machine you need help with.")}
-  <Gather input="speech" action="/getHelpRequest" method="POST" speechTimeout="auto" timeout="6">
+  <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="6">
     ${say("Please tell me what machine you need help with, like a lawnmower, riding mower, generator, pressure washer, or snowblower.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1076,7 +960,7 @@ app.post('/getHelpRequest', (req, res) => {
   res.send(`
 <Response>
   ${say("Got it. I can help you with that.")}
-  <Gather input="speech" action="/getIssue?machine=${encodeURIComponent(detectedMachine)}" method="POST" speechTimeout="auto" timeout="6">
+  <Gather input="speech" action="${xmlEscape(issueUrl)}" method="POST" speechTimeout="auto" timeout="6">
     ${say(`Please briefly describe the problem with your ${detectedMachine}.`)}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1089,10 +973,15 @@ app.post('/getIssue', (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = normalizeAddressText(req.body.SpeechResult || 'Unknown');
 
+  const nextUrl = absoluteUrl(
+    req,
+    `/scheduleDecision?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}`
+  );
+
   res.type('text/xml');
   res.send(`
 <Response>
-  <Gather input="speech" action="/scheduleDecision?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST" speechTimeout="auto" timeout="5">
+  <Gather input="speech" action="${xmlEscape(nextUrl)}" method="POST" speechTimeout="auto" timeout="5">
     ${say("Would you like to schedule an appointment?")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1112,12 +1001,22 @@ app.post('/scheduleDecision', (req, res) => {
     decision.includes('book') ||
     decision.includes('appointment');
 
+  const zipUrl = absoluteUrl(
+    req,
+    `/getZipForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}`
+  );
+
+  const messageNameUrl = absoluteUrl(
+    req,
+    `/getNameForMessage?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}`
+  );
+
   res.type('text/xml');
 
   if (wantsAppointment) {
     res.send(`
 <Response>
-  <Gather input="dtmf" numDigits="5" action="/getZipForAppointment?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST" timeout="10">
+  <Gather input="dtmf" numDigits="5" action="${xmlEscape(zipUrl)}" method="POST" timeout="10">
     ${say("Please enter your five digit zip code.")}
   </Gather>
   ${say("We did not receive your zip code. Goodbye.")}
@@ -1128,7 +1027,7 @@ app.post('/scheduleDecision', (req, res) => {
 
   res.send(`
 <Response>
-  <Gather input="speech" action="/getNameForMessage?machine=${encodeURIComponent(machine)}&amp;issue=${encodeURIComponent(issue)}" method="POST" speechTimeout="4" timeout="10">
+  <Gather input="speech" action="${xmlEscape(messageNameUrl)}" method="POST" speechTimeout="4" timeout="10">
     ${say("No problem. Can I get your first and last name, please?")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
