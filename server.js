@@ -107,7 +107,7 @@ const wordCorrections = {
 function cleanText(text) {
   return (text || '')
     .toLowerCase()
-    .replace(/[^\w\s@.\-]/g, '')
+    .replace(/[^\w\s@.\-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -309,6 +309,10 @@ function normalizeAddressText(address) {
   return finalParts.join(' ').replace(/\s{2,}/g, ' ').trim();
 }
 
+function normalizeIssueText(text) {
+  return applyLocalCorrections(String(text || 'Unknown')).trim() || 'Unknown';
+}
+
 function normalizeNameText(name) {
   const corrected = applyLocalCorrections(name);
   return corrected
@@ -382,19 +386,38 @@ function normalizeEmailSpeech(text) {
   return email;
 }
 
+function isStrictEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
+function isAcceptableEmail(email) {
+  const value = String(email || '').trim().toLowerCase();
+  if (!value) return false;
+  if (!/^[a-z0-9@._+\-]+$/.test(value)) return false;
+  if (!value.includes('@')) return false;
+  const parts = value.split('@');
+  if (parts.length !== 2) return false;
+  const local = parts[0];
+  const domain = parts[1];
+  if (!local || local.length < 1) return false;
+  if (!domain || domain.length < 2) return false;
+  if (domain.startsWith('.') || domain.endsWith('.')) return false;
+  return true;
+}
+
 function extractEmailFromSpeech(req) {
   const raw = String(req.body.SpeechResult || '').trim();
   if (!raw) return '';
 
   let email = normalizeEmailSpeech(raw);
 
-  if (isLikelyEmail(email)) {
+  if (isStrictEmail(email) || isAcceptableEmail(email)) {
     return email;
   }
 
   email = email.replace(/[^a-z0-9@._+\-]/g, '');
 
-  if (isLikelyEmail(email)) {
+  if (isStrictEmail(email) || isAcceptableEmail(email)) {
     return email;
   }
 
@@ -410,10 +433,6 @@ function formatEmailForSpeech(email) {
     .replace(/\+/g, ' plus ')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-function isLikelyEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 }
 
 function loadJobs() {
@@ -453,6 +472,19 @@ function getCountyForZip(zip) {
 
 function getEasternNow() {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+}
+
+function getEasternTimestamp() {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  }).format(new Date());
 }
 
 function formatEasternDateKey(date) {
@@ -591,6 +623,55 @@ function absoluteUrl(req, path) {
   return `${getBaseUrl(req)}${path}`;
 }
 
+function buildSafeErrorTwiml() {
+  return `
+<Response>
+  ${say("Sorry, something went wrong on our end. Please call back in a moment. Goodbye.")}
+</Response>
+`.trim();
+}
+
+function wrapRoute(handler) {
+  return async (req, res, next) => {
+    try {
+      await Promise.resolve(handler(req, res, next));
+    } catch (error) {
+      console.error('Route error:', error);
+      if (!res.headersSent) {
+        res.type('text/xml');
+        res.status(200).send(buildSafeErrorTwiml());
+      }
+    }
+  };
+}
+
+function detectYesNoOrDigits(req) {
+  const digit = String(req.body.Digits || '').trim();
+  if (digit === '1') return 'yes';
+  if (digit === '2') return 'no';
+
+  const text = cleanText(req.body.SpeechResult || '');
+  if (
+    text.includes('yes') ||
+    text.includes('correct') ||
+    text.includes('that is correct') ||
+    text.includes('sounds correct')
+  ) {
+    return 'yes';
+  }
+
+  if (
+    text.includes('no') ||
+    text.includes('not correct') ||
+    text.includes('wrong') ||
+    text.includes('change it')
+  ) {
+    return 'no';
+  }
+
+  return '';
+}
+
 function buildAppointmentConfirmationTwiml(req, {
   machine,
   issue,
@@ -618,12 +699,12 @@ function buildAppointmentConfirmationTwiml(req, {
   ${pause(1)}
   ${say(`The available appointment is ${readableDate} between ${serviceWindow}.`)}
   ${pause(1)}
-  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Does that all sound correct? Please say yes or no.")}
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Does that all sound correct? Please say yes or no. You can also press 1 for yes or 2 for no.")}
   </Gather>
   ${say("I did not catch that.")}
-  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Please say yes if everything is correct, or say no if something needs to be fixed.")}
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say yes if everything is correct, or say no if something needs to be fixed. You can also press 1 for yes or 2 for no.")}
   </Gather>
   ${say("I still did not hear anything. Goodbye.")}
 </Response>
@@ -649,12 +730,12 @@ function buildMessageConfirmationTwiml(req, {
   ${pause(1)}
   ${say(`I have your name as ${name}, phone number ${digitsToWords(phone)}, service address ${spokenAddress}, and your ${machine} has ${issue}.`)}
   ${pause(1)}
-  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Does that all sound correct? Please say yes or no.")}
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Does that all sound correct? Please say yes or no. You can also press 1 for yes or 2 for no.")}
   </Gather>
   ${say("I did not catch that.")}
-  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Please say yes if everything is correct, or say no if something needs to be fixed.")}
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say yes if everything is correct, or say no if something needs to be fixed. You can also press 1 for yes or 2 for no.")}
   </Gather>
   ${say("I still did not hear anything. Goodbye.")}
 </Response>
@@ -682,12 +763,12 @@ function buildEmailConfirmationTwiml(req, {
   return `
 <Response>
   ${say(`I heard ${formatEmailForSpeech(email)}.`)}
-  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Is that correct? Please say yes or no.")}
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Is that correct? Please say yes or no. You can also press 1 for yes or 2 for no.")}
   </Gather>
   ${say("I did not catch that.")}
-  <Gather input="speech" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
-    ${say("Please say yes if the email is correct, or say no to say it again.")}
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(actionUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say yes if the email is correct, or say no to say it again. You can also press 1 for yes or 2 for no.")}
   </Gather>
   ${say("I still did not hear anything. Goodbye.")}
 </Response>
@@ -702,6 +783,11 @@ async function getZipCoordinates(zip) {
   if (zipCoordCache[zip]) return zipCoordCache[zip];
 
   try {
+    if (typeof fetch !== 'function') {
+      console.error('Global fetch is not available in this Node runtime.');
+      return null;
+    }
+
     const response = await fetch(`https://api.zippopotam.us/us/${zip}`);
     if (!response.ok) return null;
 
@@ -718,7 +804,8 @@ async function getZipCoordinates(zip) {
 
     zipCoordCache[zip] = coords;
     return coords;
-  } catch {
+  } catch (error) {
+    console.error('ZIP lookup error:', error);
     return null;
   }
 }
@@ -827,16 +914,30 @@ function normalizeSpokenDigits(text) {
   return t.replace(/\D/g, '');
 }
 
+function normalizeTenDigitPhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return digits.slice(1);
+  }
+
+  if (digits.length >= 10) {
+    return digits.slice(0, 10);
+  }
+
+  return '';
+}
+
 function extractPhoneFromRequest(req) {
-  const dtmf = String(req.body.Digits || '').replace(/\D/g, '');
-  if (dtmf.length >= 10) {
-    return dtmf.slice(0, 10);
+  const dtmf = normalizeTenDigitPhone(req.body.Digits || '');
+  if (dtmf) {
+    return dtmf;
   }
 
   const speech = req.body.SpeechResult || '';
-  const speechDigits = normalizeSpokenDigits(speech);
-  if (speechDigits.length >= 10) {
-    return speechDigits.slice(0, 10);
+  const speechDigits = normalizeTenDigitPhone(normalizeSpokenDigits(speech));
+  if (speechDigits) {
+    return speechDigits;
   }
 
   return '';
@@ -1034,7 +1135,7 @@ app.post('/voice', (req, res) => {
 });
 
 // ===== STEP 1: HELP REQUEST / EXTRACT MACHINE =====
-app.post('/getHelpRequest', (req, res) => {
+app.post('/getHelpRequest', wrapRoute((req, res) => {
   const helpRequest = req.body.SpeechResult || '';
   const detectedMachine = detectMachine(helpRequest);
 
@@ -1068,12 +1169,12 @@ app.post('/getHelpRequest', (req, res) => {
   ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== STEP 2: ISSUE =====
-app.post('/getIssue', (req, res) => {
+app.post('/getIssue', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
-  const issue = normalizeAddressText(req.body.SpeechResult || 'Unknown');
+  const issue = normalizeIssueText(req.body.SpeechResult || 'Unknown');
 
   const nextUrl = absoluteUrl(
     req,
@@ -1089,10 +1190,10 @@ app.post('/getIssue', (req, res) => {
   ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== STEP 3: SCHEDULE DECISION =====
-app.post('/scheduleDecision', (req, res) => {
+app.post('/scheduleDecision', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const decision = cleanText(req.body.SpeechResult || '');
@@ -1135,10 +1236,10 @@ app.post('/scheduleDecision', (req, res) => {
   ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== STEP 4A: APPOINTMENT ZIP / CHECK AVAILABILITY =====
-app.post('/getZipForAppointment', async (req, res) => {
+app.post('/getZipForAppointment', wrapRoute(async (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = (req.body.Digits || '').slice(0, 5);
@@ -1174,10 +1275,10 @@ app.post('/getZipForAppointment', async (req, res) => {
   ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== STEP 4B: APPOINTMENT OPTION SELECTION =====
-app.post('/selectAppointmentOption', async (req, res) => {
+app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1284,10 +1385,10 @@ app.post('/selectAppointmentOption', async (req, res) => {
   ${say("I did not hear anything. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== STEP 5A: APPOINTMENT NAME =====
-app.post('/getNameForAppointment', (req, res) => {
+app.post('/getNameForAppointment', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1307,16 +1408,16 @@ app.post('/getNameForAppointment', (req, res) => {
 <Response>
   ${say(`Thanks, ${name}.`)}
   ${pause(1)}
-  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(phoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("What is the best phone number to reach you at?")}
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(phoneUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("What is the best phone number to reach you at? You can say it or enter it on your keypad.")}
   </Gather>
   ${say("We did not receive your phone number. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== STEP 5B: APPOINTMENT PHONE =====
-app.post('/getPhoneForAppointment', (req, res) => {
+app.post('/getPhoneForAppointment', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1342,7 +1443,7 @@ app.post('/getPhoneForAppointment', (req, res) => {
   if (!phone || phone.length < 10) {
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(retryPhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(retryPhoneUrl)}" method="POST" speechTimeout="auto" timeout="10">
     ${say("I did not get the phone number. Please say it again or enter it using your keypad.")}
   </Gather>
   ${say("We did not receive your phone number. Goodbye.")}
@@ -1354,20 +1455,20 @@ app.post('/getPhoneForAppointment', (req, res) => {
   res.send(`
 <Response>
   ${say(`I heard ${digitsToWords(phone)}.`)}
-  <Gather input="speech" action="${xmlEscape(confirmPhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Is that correct? Please say yes or no.")}
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(confirmPhoneUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Is that correct? Please say yes or no. You can also press 1 for yes or 2 for no.")}
   </Gather>
   ${say("I did not catch that.")}
-  <Gather input="speech" action="${xmlEscape(confirmPhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Please say yes if the phone number is correct, or say no to give it again.")}
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(confirmPhoneUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say yes if the phone number is correct, or say no to give it again. You can also press 1 for yes or 2 for no.")}
   </Gather>
   ${say("I still did not hear anything. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== STEP 5B-2: APPOINTMENT PHONE CONFIRM =====
-app.post('/confirmPhoneForAppointment', (req, res) => {
+app.post('/confirmPhoneForAppointment', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1377,13 +1478,7 @@ app.post('/confirmPhoneForAppointment', (req, res) => {
   const serviceWindow = req.query.serviceWindow || '';
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
-  const decision = cleanText(req.body.SpeechResult || '');
-
-  const accepted =
-    decision.includes('yes') ||
-    decision.includes('correct') ||
-    decision.includes('that is correct') ||
-    decision.includes('sounds correct');
+  const decision = detectYesNoOrDigits(req);
 
   const phoneRetryUrl = absoluteUrl(
     req,
@@ -1397,10 +1492,10 @@ app.post('/confirmPhoneForAppointment', (req, res) => {
 
   res.type('text/xml');
 
-  if (!accepted) {
+  if (decision !== 'yes') {
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(phoneRetryUrl)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(phoneRetryUrl)}" method="POST" speechTimeout="auto" timeout="10">
     ${say("Okay. Please say or enter the phone number again.")}
   </Gather>
   ${say("We did not receive your phone number. Goodbye.")}
@@ -1413,16 +1508,16 @@ app.post('/confirmPhoneForAppointment', (req, res) => {
 <Response>
   ${say("Thanks.")}
   ${pause(1)}
-  <Gather input="speech" action="${xmlEscape(addressUrl)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(addressUrl)}" method="POST" speechTimeout="auto" timeout="20">
     ${say("What is the service address? Please say the full street address.")}
   </Gather>
   ${say("We did not hear the address. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== STEP 5C: APPOINTMENT ADDRESS =====
-app.post('/getAddressForAppointment', (req, res) => {
+app.post('/getAddressForAppointment', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1444,7 +1539,7 @@ app.post('/getAddressForAppointment', (req, res) => {
   if (!address || address.length < 5) {
     res.send(`
 <Response>
-  <Gather input="speech" action="${xmlEscape(sameAddressUrl)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(sameAddressUrl)}" method="POST" speechTimeout="auto" timeout="20">
     ${say("I did not get the address. Please say the full service address again.")}
   </Gather>
   ${say("We still did not get the address. Goodbye.")}
@@ -1467,10 +1562,10 @@ app.post('/getAddressForAppointment', (req, res) => {
       address
     })
   );
-});
+}));
 
 // ===== APPOINTMENT CORRECTION CHOICE =====
-app.post('/appointmentCorrectionChoice', (req, res) => {
+app.post('/appointmentCorrectionChoice', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1527,7 +1622,7 @@ app.post('/appointmentCorrectionChoice', (req, res) => {
 
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="10">
     ${say("Please say or enter the correct phone number.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1544,7 +1639,7 @@ app.post('/appointmentCorrectionChoice', (req, res) => {
 
     res.send(`
 <Response>
-  <Gather input="speech" action="${xmlEscape(url)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="20">
     ${say("Please say the correct service address.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -1603,10 +1698,10 @@ app.post('/appointmentCorrectionChoice', (req, res) => {
 </Response>
 `.trim());
   }
-});
+}));
 
 // ===== APPOINTMENT FIELD CORRECTION ROUTES =====
-app.post('/correctAppointmentName', (req, res) => {
+app.post('/correctAppointmentName', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1633,9 +1728,9 @@ app.post('/correctAppointmentName', (req, res) => {
       address
     })
   );
-});
+}));
 
-app.post('/correctAppointmentAddress', (req, res) => {
+app.post('/correctAppointmentAddress', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1657,7 +1752,7 @@ app.post('/correctAppointmentAddress', (req, res) => {
   if (!address || address.length < 5) {
     res.send(`
 <Response>
-  <Gather input="speech" action="${xmlEscape(sameUrl)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(sameUrl)}" method="POST" speechTimeout="auto" timeout="20">
     ${say("I did not get the correct address. Please say the full service address again.")}
   </Gather>
   ${say("We did not hear anything. Goodbye.")}
@@ -1680,9 +1775,9 @@ app.post('/correctAppointmentAddress', (req, res) => {
       address
     })
   );
-});
+}));
 
-app.post('/correctAppointmentMachine', (req, res) => {
+app.post('/correctAppointmentMachine', wrapRoute((req, res) => {
   const currentMachine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1728,9 +1823,9 @@ app.post('/correctAppointmentMachine', (req, res) => {
       address
     })
   );
-});
+}));
 
-app.post('/correctAppointmentIssue', (req, res) => {
+app.post('/correctAppointmentIssue', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const zip = req.query.zip || 'Unknown';
   const serviceDate = req.query.serviceDate || '';
@@ -1740,7 +1835,7 @@ app.post('/correctAppointmentIssue', (req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
   const address = req.query.address || '';
-  const issue = normalizeAddressText(req.body.SpeechResult || 'Unknown');
+  const issue = normalizeIssueText(req.body.SpeechResult || 'Unknown');
 
   res.type('text/xml');
   res.send(
@@ -1757,10 +1852,10 @@ app.post('/correctAppointmentIssue', (req, res) => {
       address
     })
   );
-});
+}));
 
 // ===== EMAIL CAPTURE FOR APPOINTMENTS =====
-app.post('/getEmailForAppointment', (req, res) => {
+app.post('/getEmailForAppointment', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1780,11 +1875,11 @@ app.post('/getEmailForAppointment', (req, res) => {
 
   res.type('text/xml');
 
-  if (!isLikelyEmail(email)) {
+  if (!isAcceptableEmail(email)) {
     res.send(`
 <Response>
   <Gather input="speech" action="${xmlEscape(sameUrl)}" method="POST" speechTimeout="auto" timeout="15">
-    ${say("I did not get a valid email address. Please say it slowly, for example, c t eight eight eight nine one at gmail dot com.")}
+    ${say("I did not get the email address clearly. Please say it again.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
@@ -1807,9 +1902,9 @@ app.post('/getEmailForAppointment', (req, res) => {
       email
     })
   );
-});
+}));
 
-app.post('/confirmAppointmentEmail', async (req, res) => {
+app.post('/confirmAppointmentEmail', wrapRoute(async (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1821,13 +1916,7 @@ app.post('/confirmAppointmentEmail', async (req, res) => {
   const phone = req.query.phone || '';
   const address = req.query.address || '';
   const email = req.query.email || '';
-  const decision = cleanText(req.body.SpeechResult || '');
-
-  const accepted =
-    decision.includes('yes') ||
-    decision.includes('correct') ||
-    decision.includes('that is correct') ||
-    decision.includes('sounds correct');
+  const decision = detectYesNoOrDigits(req);
 
   const retryUrl = absoluteUrl(
     req,
@@ -1836,7 +1925,7 @@ app.post('/confirmAppointmentEmail', async (req, res) => {
 
   res.type('text/xml');
 
-  if (!accepted) {
+  if (decision !== 'yes') {
     res.send(`
 <Response>
   <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="15">
@@ -1862,7 +1951,7 @@ app.post('/confirmAppointmentEmail', async (req, res) => {
     serviceDay,
     serviceCounty,
     serviceWindow,
-    time: new Date().toLocaleString()
+    time: getEasternTimestamp()
   };
 
   saveJob(job);
@@ -1889,10 +1978,10 @@ app.post('/confirmAppointmentEmail', async (req, res) => {
   ${say(`We look forward to helping with your ${machine}. Have a wonderful day.`)}
 </Response>
 `.trim());
-});
+}));
 
 // ===== STEP 5D: FINAL APPOINTMENT CONFIRM =====
-app.post('/finalConfirmAppointment', async (req, res) => {
+app.post('/finalConfirmAppointment', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -1903,13 +1992,7 @@ app.post('/finalConfirmAppointment', async (req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
   const address = req.query.address || '';
-  const decision = cleanText(req.body.SpeechResult || '');
-
-  const accepted =
-    decision.includes('yes') ||
-    decision.includes('correct') ||
-    decision.includes('sounds correct') ||
-    decision.includes('that is correct');
+  const decision = detectYesNoOrDigits(req);
 
   const correctionUrl = absoluteUrl(
     req,
@@ -1923,7 +2006,7 @@ app.post('/finalConfirmAppointment', async (req, res) => {
 
   res.type('text/xml');
 
-  if (!accepted) {
+  if (decision !== 'yes') {
     res.send(`
 <Response>
   <Gather input="speech" action="${xmlEscape(correctionUrl)}" method="POST" speechTimeout="auto" timeout="8">
@@ -1949,10 +2032,10 @@ app.post('/finalConfirmAppointment', async (req, res) => {
   ${say("I still did not hear anything. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== MESSAGE PATH =====
-app.post('/getNameForMessage', (req, res) => {
+app.post('/getNameForMessage', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const name = normalizeNameText(req.body.SpeechResult);
@@ -1967,15 +2050,15 @@ app.post('/getNameForMessage', (req, res) => {
 <Response>
   ${say(`Thanks, ${name}.`)}
   ${pause(1)}
-  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(phoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("What is the best phone number to reach you at?")}
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(phoneUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("What is the best phone number to reach you at? You can say it or enter it on your keypad.")}
   </Gather>
   ${say("We did not receive your phone number. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
-app.post('/getPhoneForMessage', (req, res) => {
+app.post('/getPhoneForMessage', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const name = req.query.name || 'Unknown';
@@ -1996,7 +2079,7 @@ app.post('/getPhoneForMessage', (req, res) => {
   if (!phone || phone.length < 10) {
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(retryPhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(retryPhoneUrl)}" method="POST" speechTimeout="auto" timeout="10">
     ${say("I did not get the phone number. Please say it again or enter it using your keypad.")}
   </Gather>
   ${say("We did not receive your phone number. Goodbye.")}
@@ -2008,31 +2091,25 @@ app.post('/getPhoneForMessage', (req, res) => {
   res.send(`
 <Response>
   ${say(`I heard ${digitsToWords(phone)}.`)}
-  <Gather input="speech" action="${xmlEscape(confirmPhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Is that correct? Please say yes or no.")}
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(confirmPhoneUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Is that correct? Please say yes or no. You can also press 1 for yes or 2 for no.")}
   </Gather>
   ${say("I did not catch that.")}
-  <Gather input="speech" action="${xmlEscape(confirmPhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Please say yes if the phone number is correct, or say no to give it again.")}
+  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(confirmPhoneUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say yes if the phone number is correct, or say no to give it again. You can also press 1 for yes or 2 for no.")}
   </Gather>
   ${say("I still did not hear anything. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== STEP 5B-2: MESSAGE PHONE CONFIRM =====
-app.post('/confirmPhoneForMessage', (req, res) => {
+app.post('/confirmPhoneForMessage', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
-  const decision = cleanText(req.body.SpeechResult || '');
-
-  const accepted =
-    decision.includes('yes') ||
-    decision.includes('correct') ||
-    decision.includes('that is correct') ||
-    decision.includes('sounds correct');
+  const decision = detectYesNoOrDigits(req);
 
   const phoneRetryUrl = absoluteUrl(
     req,
@@ -2046,10 +2123,10 @@ app.post('/confirmPhoneForMessage', (req, res) => {
 
   res.type('text/xml');
 
-  if (!accepted) {
+  if (decision !== 'yes') {
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(phoneRetryUrl)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(phoneRetryUrl)}" method="POST" speechTimeout="auto" timeout="10">
     ${say("Okay. Please say or enter the phone number again.")}
   </Gather>
   ${say("We did not receive your phone number. Goodbye.")}
@@ -2062,16 +2139,16 @@ app.post('/confirmPhoneForMessage', (req, res) => {
 <Response>
   ${say("Thanks.")}
   ${pause(1)}
-  <Gather input="speech" action="${xmlEscape(addressUrl)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(addressUrl)}" method="POST" speechTimeout="auto" timeout="20">
     ${say("What is the service address? Please say the full street address.")}
   </Gather>
   ${say("We did not hear the address. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== STEP 5C: MESSAGE ADDRESS =====
-app.post('/getAddressForMessage', (req, res) => {
+app.post('/getAddressForMessage', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const name = req.query.name || 'Unknown';
@@ -2088,7 +2165,7 @@ app.post('/getAddressForMessage', (req, res) => {
   if (!address || address.length < 5) {
     res.send(`
 <Response>
-  <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="20">
     ${say("I did not get the address. Please say the full service address again.")}
   </Gather>
   ${say("We still did not get the address. Goodbye.")}
@@ -2106,10 +2183,10 @@ app.post('/getAddressForMessage', (req, res) => {
       address
     })
   );
-});
+}));
 
 // ===== MESSAGE CORRECTION CHOICE =====
-app.post('/messageCorrectionChoice', (req, res) => {
+app.post('/messageCorrectionChoice', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const name = req.query.name || 'Unknown';
@@ -2161,7 +2238,7 @@ app.post('/messageCorrectionChoice', (req, res) => {
 
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="8">
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="10">
     ${say("Please say or enter the correct phone number.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -2178,7 +2255,7 @@ app.post('/messageCorrectionChoice', (req, res) => {
 
     res.send(`
 <Response>
-  <Gather input="speech" action="${xmlEscape(url)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(url)}" method="POST" speechTimeout="auto" timeout="20">
     ${say("Please say the correct service address.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
@@ -2219,10 +2296,10 @@ app.post('/messageCorrectionChoice', (req, res) => {
 </Response>
 `.trim());
   }
-});
+}));
 
 // ===== MESSAGE FIELD CORRECTION ROUTES =====
-app.post('/correctMessageName', (req, res) => {
+app.post('/correctMessageName', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const phone = req.query.phone || '';
@@ -2239,9 +2316,9 @@ app.post('/correctMessageName', (req, res) => {
       address
     })
   );
-});
+}));
 
-app.post('/correctMessageAddress', (req, res) => {
+app.post('/correctMessageAddress', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const name = req.query.name || 'Unknown';
@@ -2258,7 +2335,7 @@ app.post('/correctMessageAddress', (req, res) => {
   if (!address || address.length < 5) {
     res.send(`
 <Response>
-  <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="5" timeout="15">
+  <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="20">
     ${say("I did not get the correct address. Please say it again.")}
   </Gather>
   ${say("We did not hear anything. Goodbye.")}
@@ -2276,9 +2353,9 @@ app.post('/correctMessageAddress', (req, res) => {
       address
     })
   );
-});
+}));
 
-app.post('/correctMessageMachine', (req, res) => {
+app.post('/correctMessageMachine', wrapRoute((req, res) => {
   const issue = req.query.issue || 'Unknown';
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
@@ -2313,14 +2390,14 @@ app.post('/correctMessageMachine', (req, res) => {
       address
     })
   );
-});
+}));
 
-app.post('/correctMessageIssue', (req, res) => {
+app.post('/correctMessageIssue', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
   const address = req.query.address || '';
-  const issue = normalizeAddressText(req.body.SpeechResult || 'Unknown');
+  const issue = normalizeIssueText(req.body.SpeechResult || 'Unknown');
 
   res.type('text/xml');
   res.send(
@@ -2332,22 +2409,16 @@ app.post('/correctMessageIssue', (req, res) => {
       address
     })
   );
-});
+}));
 
 // ===== FINAL MESSAGE CONFIRM =====
-app.post('/finalConfirmMessage', (req, res) => {
+app.post('/finalConfirmMessage', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
   const address = req.query.address || '';
-  const decision = cleanText(req.body.SpeechResult || '');
-
-  const accepted =
-    decision.includes('yes') ||
-    decision.includes('correct') ||
-    decision.includes('sounds correct') ||
-    decision.includes('that is correct');
+  const decision = detectYesNoOrDigits(req);
 
   const correctionUrl = absoluteUrl(
     req,
@@ -2356,7 +2427,7 @@ app.post('/finalConfirmMessage', (req, res) => {
 
   res.type('text/xml');
 
-  if (!accepted) {
+  if (decision !== 'yes') {
     res.send(`
 <Response>
   <Gather input="speech" action="${xmlEscape(correctionUrl)}" method="POST" speechTimeout="auto" timeout="8">
@@ -2376,7 +2447,7 @@ app.post('/finalConfirmMessage', (req, res) => {
     problem: issue,
     phone,
     address,
-    time: new Date().toLocaleString()
+    time: getEasternTimestamp()
   };
 
   saveJob(job);
@@ -2386,10 +2457,10 @@ app.post('/finalConfirmMessage', (req, res) => {
   ${say("Thank you. Your message has been received. We will contact you shortly. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== OUT OF AREA VOICEMAIL =====
-app.post('/voicemail', (req, res) => {
+app.post('/voicemail', wrapRoute((req, res) => {
   const matchedCounties = getCountyForZip(req.query.zip || '');
 
   const job = {
@@ -2401,7 +2472,7 @@ app.post('/voicemail', (req, res) => {
     zip: req.query.zip || 'Unknown',
     serviceCounty: matchedCounties.join(', '),
     recording: req.body.RecordingUrl || '',
-    time: new Date().toLocaleString()
+    time: getEasternTimestamp()
   };
 
   saveJob(job);
@@ -2412,7 +2483,7 @@ app.post('/voicemail', (req, res) => {
   ${say("Thank you. Your message has been recorded. Goodbye.")}
 </Response>
 `.trim());
-});
+}));
 
 // ===== JOBS PAGE =====
 app.get('/jobs', (req, res) => {
@@ -2497,6 +2568,24 @@ app.get('/jobs', (req, res) => {
 `;
 
   res.send(html);
+});
+
+app.use((err, req, res, next) => {
+  console.error('Unhandled app error:', err);
+  if (!res.headersSent) {
+    res.type('text/xml');
+    res.status(200).send(buildSafeErrorTwiml());
+    return;
+  }
+  next(err);
+});
+
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled rejection:', error);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
 });
 
 const PORT = process.env.PORT || 3000;
