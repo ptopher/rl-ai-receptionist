@@ -57,6 +57,7 @@ const countyZips = {
 const exactPhraseCorrections = [
   ['bevern', 'severn'],
   ['seven maryland', 'severn maryland'],
+  ['7 maryland', 'severn maryland'],
   ['severn marylin', 'severn maryland'],
   ['odenton marylin', 'odenton maryland'],
   ['glen bernie', 'glen burnie'],
@@ -220,6 +221,8 @@ function normalizeAddressText(address) {
     .replace(/\s+/g, ' ')
     .trim();
 
+  corrected = corrected.replace(/\b7\s+Maryland\b/gi, 'Severn Maryland');
+
   const cityStateWords = new Set([
     'severn',
     'odenton',
@@ -366,11 +369,88 @@ function normalizeEmailSpeech(text) {
     nine: '9'
   };
 
+  const letterMap = {
+    a: 'a',
+    ay: 'a',
+    b: 'b',
+    bee: 'b',
+    be: 'b',
+    c: 'c',
+    cee: 'c',
+    see: 'c',
+    sea: 'c',
+    she: 'c',
+    d: 'd',
+    dee: 'd',
+    e: 'e',
+    f: 'f',
+    ef: 'f',
+    g: 'g',
+    gee: 'g',
+    h: 'h',
+    aitch: 'h',
+    i: 'i',
+    j: 'j',
+    jay: 'j',
+    k: 'k',
+    kay: 'k',
+    l: 'l',
+    el: 'l',
+    m: 'm',
+    em: 'm',
+    n: 'n',
+    en: 'n',
+    o: 'o',
+    oh: 'o',
+    p: 'p',
+    pee: 'p',
+    q: 'q',
+    cue: 'q',
+    queue: 'q',
+    r: 'r',
+    ar: 'r',
+    s: 's',
+    ess: 's',
+    t: 't',
+    tee: 't',
+    u: 'u',
+    you: 'u',
+    v: 'v',
+    vee: 'v',
+    w: 'w',
+    doubleyou: 'w',
+    x: 'x',
+    ex: 'x',
+    y: 'y',
+    why: 'y',
+    z: 'z',
+    zee: 'z',
+    zed: 'z'
+  };
+
   const tokens = email.split(/\s+/).filter(Boolean);
-  const convertedTokens = tokens.map((token) => {
+  const convertedTokens = tokens.map((token, index) => {
     if (digitMap[token]) {
       return digitMap[token];
     }
+
+    if (letterMap[token]) {
+      const next = tokens[index + 1] || '';
+      const prev = tokens[index - 1] || '';
+
+      if (
+        index === 0 ||
+        next === '@' ||
+        prev === '@' ||
+        /^\d+$/.test(next) ||
+        /^\d+$/.test(prev) ||
+        next === '.' ||
+        prev === '.'
+      ) {
+        return letterMap[token];
+      }
+    }
+
     return token;
   });
 
