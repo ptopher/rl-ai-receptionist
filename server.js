@@ -1327,7 +1327,65 @@ app.post('/getPhoneForAppointment', (req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = extractPhoneFromRequest(req);
 
-  const samePhoneUrl = absoluteUrl(
+  const retryPhoneUrl = absoluteUrl(
+    req,
+    `/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}`
+  );
+
+  const confirmPhoneUrl = absoluteUrl(
+    req,
+    `/confirmPhoneForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}`
+  );
+
+  res.type('text/xml');
+
+  if (!phone || phone.length < 10) {
+    res.send(`
+<Response>
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(retryPhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("I did not get the phone number. Please say it again or enter it using your keypad.")}
+  </Gather>
+  ${say("We did not receive your phone number. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  res.send(`
+<Response>
+  ${say(`I heard ${digitsToWords(phone)}.`)}
+  <Gather input="speech" action="${xmlEscape(confirmPhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Is that correct? Please say yes or no.")}
+  </Gather>
+  ${say("I did not catch that.")}
+  <Gather input="speech" action="${xmlEscape(confirmPhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Please say yes if the phone number is correct, or say no to give it again.")}
+  </Gather>
+  ${say("I still did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
+// ===== STEP 5B-2: APPOINTMENT PHONE CONFIRM =====
+app.post('/confirmPhoneForAppointment', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const zip = req.query.zip || 'Unknown';
+  const serviceDate = req.query.serviceDate || '';
+  const serviceDay = req.query.serviceDay || '';
+  const serviceCounty = req.query.serviceCounty || '';
+  const serviceWindow = req.query.serviceWindow || '';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const decision = cleanText(req.body.SpeechResult || '');
+
+  const accepted =
+    decision.includes('yes') ||
+    decision.includes('correct') ||
+    decision.includes('that is correct') ||
+    decision.includes('sounds correct');
+
+  const phoneRetryUrl = absoluteUrl(
     req,
     `/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}`
   );
@@ -1339,11 +1397,11 @@ app.post('/getPhoneForAppointment', (req, res) => {
 
   res.type('text/xml');
 
-  if (!phone || phone.length < 10) {
+  if (!accepted) {
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(samePhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("I did not get the phone number. Please say it again or enter it using your keypad.")}
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(phoneRetryUrl)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Okay. Please say or enter the phone number again.")}
   </Gather>
   ${say("We did not receive your phone number. Goodbye.")}
 </Response>
@@ -1464,7 +1522,7 @@ app.post('/appointmentCorrectionChoice', (req, res) => {
   if (correctionField === 'phone') {
     const url = absoluteUrl(
       req,
-      `/correctAppointmentPhone?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&address=${encodeURIComponent(address)}`
+      `/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}`
     );
 
     res.send(`
@@ -1561,53 +1619,6 @@ app.post('/correctAppointmentName', (req, res) => {
   const name = normalizeNameText(req.body.SpeechResult);
 
   res.type('text/xml');
-  res.send(
-    buildAppointmentConfirmationTwiml(req, {
-      machine,
-      issue,
-      zip,
-      serviceDate,
-      serviceDay,
-      serviceCounty,
-      serviceWindow,
-      name,
-      phone,
-      address
-    })
-  );
-});
-
-app.post('/correctAppointmentPhone', (req, res) => {
-  const machine = req.query.machine || 'Unknown';
-  const issue = req.query.issue || 'Unknown';
-  const zip = req.query.zip || 'Unknown';
-  const serviceDate = req.query.serviceDate || '';
-  const serviceDay = req.query.serviceDay || '';
-  const serviceCounty = req.query.serviceCounty || '';
-  const serviceWindow = req.query.serviceWindow || '';
-  const name = req.query.name || 'Unknown';
-  const address = req.query.address || '';
-  const phone = extractPhoneFromRequest(req);
-
-  const sameUrl = absoluteUrl(
-    req,
-    `/correctAppointmentPhone?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}&address=${encodeURIComponent(address)}`
-  );
-
-  res.type('text/xml');
-
-  if (!phone || phone.length < 10) {
-    res.send(`
-<Response>
-  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(sameUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("I did not get the correct phone number. Please say it again or enter it using your keypad.")}
-  </Gather>
-  ${say("We did not hear anything. Goodbye.")}
-</Response>
-`.trim());
-    return;
-  }
-
   res.send(
     buildAppointmentConfirmationTwiml(req, {
       machine,
@@ -1970,7 +1981,60 @@ app.post('/getPhoneForMessage', (req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = extractPhoneFromRequest(req);
 
-  const retryUrl = absoluteUrl(
+  const retryPhoneUrl = absoluteUrl(
+    req,
+    `/getPhoneForMessage?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}`
+  );
+
+  const confirmPhoneUrl = absoluteUrl(
+    req,
+    `/confirmPhoneForMessage?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}`
+  );
+
+  res.type('text/xml');
+
+  if (!phone || phone.length < 10) {
+    res.send(`
+<Response>
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(retryPhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("I did not get the phone number. Please say it again or enter it using your keypad.")}
+  </Gather>
+  ${say("We did not receive your phone number. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  res.send(`
+<Response>
+  ${say(`I heard ${digitsToWords(phone)}.`)}
+  <Gather input="speech" action="${xmlEscape(confirmPhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Is that correct? Please say yes or no.")}
+  </Gather>
+  ${say("I did not catch that.")}
+  <Gather input="speech" action="${xmlEscape(confirmPhoneUrl)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Please say yes if the phone number is correct, or say no to give it again.")}
+  </Gather>
+  ${say("I still did not hear anything. Goodbye.")}
+</Response>
+`.trim());
+});
+
+// ===== STEP 5B-2: MESSAGE PHONE CONFIRM =====
+app.post('/confirmPhoneForMessage', (req, res) => {
+  const machine = req.query.machine || 'Unknown';
+  const issue = req.query.issue || 'Unknown';
+  const name = req.query.name || 'Unknown';
+  const phone = req.query.phone || '';
+  const decision = cleanText(req.body.SpeechResult || '');
+
+  const accepted =
+    decision.includes('yes') ||
+    decision.includes('correct') ||
+    decision.includes('that is correct') ||
+    decision.includes('sounds correct');
+
+  const phoneRetryUrl = absoluteUrl(
     req,
     `/getPhoneForMessage?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}`
   );
@@ -1982,11 +2046,11 @@ app.post('/getPhoneForMessage', (req, res) => {
 
   res.type('text/xml');
 
-  if (!phone || phone.length < 10) {
+  if (!accepted) {
     res.send(`
 <Response>
-  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("I did not get the phone number. Please say it again or enter it using your keypad.")}
+  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(phoneRetryUrl)}" method="POST" speechTimeout="auto" timeout="8">
+    ${say("Okay. Please say or enter the phone number again.")}
   </Gather>
   ${say("We did not receive your phone number. Goodbye.")}
 </Response>
@@ -2001,11 +2065,12 @@ app.post('/getPhoneForMessage', (req, res) => {
   <Gather input="speech" action="${xmlEscape(addressUrl)}" method="POST" speechTimeout="5" timeout="15">
     ${say("What is the service address? Please say the full street address.")}
   </Gather>
-  ${say("I did not hear the address. Goodbye.")}
+  ${say("We did not hear the address. Goodbye.")}
 </Response>
 `.trim());
 });
 
+// ===== STEP 5C: MESSAGE ADDRESS =====
 app.post('/getAddressForMessage', (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
@@ -2091,7 +2156,7 @@ app.post('/messageCorrectionChoice', (req, res) => {
   if (correctionField === 'phone') {
     const url = absoluteUrl(
       req,
-      `/correctMessagePhone?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&address=${encodeURIComponent(address)}`
+      `/getPhoneForMessage?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}`
     );
 
     res.send(`
@@ -2165,43 +2230,6 @@ app.post('/correctMessageName', (req, res) => {
   const name = normalizeNameText(req.body.SpeechResult);
 
   res.type('text/xml');
-  res.send(
-    buildMessageConfirmationTwiml(req, {
-      machine,
-      issue,
-      name,
-      phone,
-      address
-    })
-  );
-});
-
-app.post('/correctMessagePhone', (req, res) => {
-  const machine = req.query.machine || 'Unknown';
-  const issue = req.query.issue || 'Unknown';
-  const name = req.query.name || 'Unknown';
-  const address = req.query.address || '';
-  const phone = extractPhoneFromRequest(req);
-
-  const retryUrl = absoluteUrl(
-    req,
-    `/correctMessagePhone?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&name=${encodeURIComponent(name)}&address=${encodeURIComponent(address)}`
-  );
-
-  res.type('text/xml');
-
-  if (!phone || phone.length < 10) {
-    res.send(`
-<Response>
-  <Gather input="speech dtmf" numDigits="10" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("I did not get the correct phone number. Please say it again or enter it using your keypad.")}
-  </Gather>
-  ${say("We did not hear anything. Goodbye.")}
-</Response>
-`.trim());
-    return;
-  }
-
   res.send(
     buildMessageConfirmationTwiml(req, {
       machine,
