@@ -208,7 +208,7 @@ function normalizeStreetSuffixWord(word) {
     ter: 'Ter',
     terrace: 'Terrace',
     pkwy: 'Pkwy',
-    parkway: 'Parkway'
+    parkway: 'Pkwy'
   };
 
   return streetMap[lower] || null;
@@ -229,21 +229,6 @@ function normalizeAddressText(address) {
     .replace(/\b7\s+Maryland\b/gi, 'Severn Maryland')
     .replace(/\bStubborn\s+Maryland\b/gi, 'Severn Maryland')
     .replace(/\bStubbern\s+Maryland\b/gi, 'Severn Maryland');
-
-  const cityStateWords = new Set([
-    'severn',
-    'odenton',
-    'laurel',
-    'bowie',
-    'crofton',
-    'gambrills',
-    'millersville',
-    'pasadena',
-    'annapolis',
-    'columbia',
-    'maryland',
-    'md'
-  ]);
 
   const tokens = corrected.split(/\s+/);
   const rebuilt = [];
@@ -276,57 +261,65 @@ function normalizeAddressText(address) {
     rebuilt.push(normalizedWord);
   }
 
-  let firstCityIndex = -1;
-  for (let i = 0; i < rebuilt.length; i += 1) {
-    const lower = rebuilt[i].toLowerCase();
-    if (cityStateWords.has(lower)) {
-      firstCityIndex = i;
+  return rebuilt.join(' ').replace(/\s{2,}/g, ' ').trim();
+}
+
+function removeTrailingZipOnly(text, zip) {
+  if (!zip) return String(text || '').trim();
+  const escapedZip = zip.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return String(text || '')
+    .replace(new RegExp(`\\s+${escapedZip}\\s*$`, 'i'), '')
+    .trim();
+}
+
+function removeKnownLocationSuffix(text, place, zip) {
+  let result = String(text || '').trim();
+  if (!result) return result;
+
+  const city = String(place?.city || '').trim();
+  const state = String(place?.state || '').trim();
+  const stateAbbreviation = String(place?.stateAbbreviation || '').trim();
+
+  const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const patterns = [];
+
+  if (city && state && zip) {
+    patterns.push(new RegExp(`\\s+${escapeRegex(city)}\\s+${escapeRegex(state)}\\s+${escapeRegex(zip)}\\s*$`, 'i'));
+  }
+
+  if (city && stateAbbreviation && zip) {
+    patterns.push(new RegExp(`\\s+${escapeRegex(city)}\\s+${escapeRegex(stateAbbreviation)}\\s+${escapeRegex(zip)}\\s*$`, 'i'));
+  }
+
+  if (city && state) {
+    patterns.push(new RegExp(`\\s+${escapeRegex(city)}\\s+${escapeRegex(state)}\\s*$`, 'i'));
+  }
+
+  if (city && stateAbbreviation) {
+    patterns.push(new RegExp(`\\s+${escapeRegex(city)}\\s+${escapeRegex(stateAbbreviation)}\\s*$`, 'i'));
+  }
+
+  if (state && zip) {
+    patterns.push(new RegExp(`\\s+${escapeRegex(state)}\\s+${escapeRegex(zip)}\\s*$`, 'i'));
+  }
+
+  if (stateAbbreviation && zip) {
+    patterns.push(new RegExp(`\\s+${escapeRegex(stateAbbreviation)}\\s+${escapeRegex(zip)}\\s*$`, 'i'));
+  }
+
+  if (zip) {
+    patterns.push(new RegExp(`\\s+${escapeRegex(zip)}\\s*$`, 'i'));
+  }
+
+  for (const pattern of patterns) {
+    if (pattern.test(result)) {
+      result = result.replace(pattern, '').trim();
       break;
     }
   }
 
-  let finalParts = [];
-
-  if (firstCityIndex === -1) {
-    finalParts = rebuilt;
-  } else {
-    const streetParts = rebuilt.slice(0, firstCityIndex);
-    const cityStateParts = rebuilt.slice(firstCityIndex);
-
-    const cleanedStreet = [];
-    for (let i = 0; i < streetParts.length; i += 1) {
-      const current = streetParts[i];
-      const currentLower = current.toLowerCase();
-
-      if (
-        currentLower === 'old' &&
-        i + 2 < streetParts.length &&
-        streetParts[i + 2] === 'Court'
-      ) {
-        cleanedStreet.push('Old');
-        cleanedStreet.push(streetParts[i + 1]);
-        cleanedStreet.push('Court');
-        i += 2;
-        continue;
-      }
-
-      cleanedStreet.push(current);
-    }
-
-    finalParts = [...cleanedStreet, ...cityStateParts];
-  }
-
-  return finalParts.join(' ').replace(/\s{2,}/g, ' ').trim();
-}
-
-function stripTrailingLocationBits(address) {
-  return String(address || '')
-    .replace(/\s+[A-Za-z]+(?:\s+[A-Za-z]+){0,2}\s+(?:Maryland|MD)\s+\d{4,5}\s*$/i, '')
-    .replace(/\s+(?:Maryland|MD)\s+\d{4,5}\s*$/i, '')
-    .replace(/\s+[A-Za-z]+(?:\s+[A-Za-z]+){0,2}\s+(?:Maryland|MD)\s*$/i, '')
-    .replace(/\s+(?:Maryland|MD)\s*$/i, '')
-    .replace(/\s+\d{4,5}\s*$/i, '')
-    .trim();
+  return result;
 }
 
 function normalizeIssueText(text) {
@@ -479,6 +472,8 @@ function normalizeEmailSpeech(text) {
   email = email.replace(/\s*-\s*/g, '-');
   email = email.replace(/\s*\+\s*/g, '+');
   email = email.replace(/\s+/g, '');
+  email = email.replace(/^[._+\-]+/, '');
+  email = email.replace(/[._+\-]+$/, '');
 
   return email;
 }
@@ -514,6 +509,8 @@ function sanitizeLooseEmail(email) {
     .replace(/_{2,}/g, '_')
     .replace(/-{2,}/g, '-')
     .replace(/\+{2,}/g, '+')
+    .replace(/^[._+\-]+/, '')
+    .replace(/[._+\-]+$/, '')
     .trim();
 }
 
@@ -543,6 +540,7 @@ function extractEmailFromSpeech(req) {
 
 function formatEmailForSpeech(email) {
   return String(email || '')
+    .replace(/[._+\-]+$/, '')
     .replace(/@/g, ' at ')
     .replace(/\./g, ' dot ')
     .replace(/_/g, ' underscore ')
@@ -966,8 +964,8 @@ async function normalizeAddressForKnownZip(rawAddress, expectedZip) {
     return normalized;
   }
 
-  const streetOnly = stripTrailingLocationBits(normalized) || normalized.replace(/\s+\d{4,5}\s*$/, '').trim();
   const place = await getZipPlaceInfo(expectedZip);
+  const streetOnly = removeKnownLocationSuffix(normalized, place, expectedZip) || removeTrailingZipOnly(normalized, expectedZip) || normalized;
 
   if (!place || !place.city) {
     return `${streetOnly} ${expectedZip}`.replace(/\s+/g, ' ').trim();
@@ -2084,7 +2082,7 @@ app.post('/confirmAppointmentEmail', wrapRoute(async (req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
   const address = req.query.address || '';
-  const email = req.query.email || '';
+  const email = sanitizeLooseEmail(req.query.email || '');
   const decision = detectYesNoOrDigits(req);
 
   const retryUrl = absoluteUrl(
