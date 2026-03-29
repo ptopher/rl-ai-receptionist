@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const nodemailer = require('nodemailer');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const app = express();
 
 app.use(express.urlencoded({ extended: false }));
@@ -1002,11 +1003,6 @@ async function getZipCoordinates(zip) {
   if (zipCoordCache[zip]) return zipCoordCache[zip];
 
   try {
-    if (typeof fetch !== 'function') {
-      console.error('Global fetch is not available in this Node runtime.');
-      return null;
-    }
-
     const response = await fetch(`https://api.zippopotam.us/us/${zip}`);
     if (!response.ok) return null;
 
@@ -1034,11 +1030,6 @@ async function getZipPlaceInfo(zip) {
   if (zipPlaceCache[zip]) return zipPlaceCache[zip];
 
   try {
-    if (typeof fetch !== 'function') {
-      console.error('Global fetch is not available in this Node runtime.');
-      return null;
-    }
-
     const response = await fetch(`https://api.zippopotam.us/us/${zip}`);
     if (!response.ok) return null;
 
@@ -1392,15 +1383,15 @@ app.get('/', (req, res) => {
   res.send('RL AI Receptionist is running');
 });
 
-app.get('/voice', (req, res) => {
+app.get('/voice', wrapRoute((req, res) => {
   res.type('text/xml');
   res.send(buildVoiceTwiml(req));
-});
+}));
 
-app.post('/voice', (req, res) => {
+app.post('/voice', wrapRoute((req, res) => {
   res.type('text/xml');
   res.send(buildVoiceTwiml(req));
-});
+}));
 
 // ===== STEP 1: HELP REQUEST / EXTRACT MACHINE =====
 app.post('/getHelpRequest', wrapRoute((req, res) => {
