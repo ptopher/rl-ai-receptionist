@@ -1387,6 +1387,33 @@ app.get('/', (req, res) => {
   res.send('RL AI Receptionist is running');
 });
 
+// ===== NEW TEST EMAIL ROUTE =====
+app.get('/test-email', wrapRoute(async (req, res) => {
+  const to = req.query.to || emailConfig.user || emailConfig.from;
+
+  if (!to) {
+    res.status(200).type('text/plain').send('TEST EMAIL FAILED: no recipient available');
+    return;
+  }
+
+  const result = await sendAppointmentConfirmationEmail({
+    to,
+    name: 'Test Customer',
+    machine: 'Snowblower',
+    issue: 'Test email check',
+    serviceDate: formatEasternDateKey(getEasternNow()),
+    serviceWindow: '10:00 to 12:00',
+    address: '1748 Old Georgetown Court Severn Maryland 21144'
+  });
+
+  if (result && result.sent) {
+    res.status(200).type('text/plain').send(`EMAIL SENT TO: ${to}`);
+    return;
+  }
+
+  res.status(200).type('text/plain').send(`TEST EMAIL FAILED: ${JSON.stringify(result)}`);
+}));
+
 app.get('/voice', wrapRoute((req, res) => {
   res.type('text/xml');
   res.send(buildVoiceTwiml(req));
