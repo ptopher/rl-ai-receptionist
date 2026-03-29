@@ -123,6 +123,8 @@ async function sendAppointmentConfirmationEmail({
     </div>
   `;
 
+  console.log('Attempting appointment confirmation email to:', to);
+
   await transporter.sendMail({
     from: emailConfig.from,
     to,
@@ -130,6 +132,8 @@ async function sendAppointmentConfirmationEmail({
     text: textBody,
     html: htmlBody
   });
+
+  console.log('Appointment confirmation email sent successfully to:', to);
 
   return { sent: true };
 }
@@ -2226,6 +2230,8 @@ app.post('/confirmAppointmentEmail', wrapRoute(async (req, res) => {
     }
   }
 
+  console.log('JOB SAVED, PREPARING TO SEND EMAIL TO:', email);
+
   try {
     await sendAppointmentConfirmationEmail({
       to: email,
@@ -2239,6 +2245,8 @@ app.post('/confirmAppointmentEmail', wrapRoute(async (req, res) => {
   } catch (error) {
     console.error('Appointment email send failed:', error);
   }
+
+  console.log('EMAIL SEND BLOCK FINISHED FOR:', email);
 
   const readableDate = getReadableDate(serviceDate);
 
