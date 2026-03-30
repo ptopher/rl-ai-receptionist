@@ -1470,6 +1470,17 @@ app.get('/test-email', wrapRoute(async (req, res) => {
   }
 }));
 
+app.get('/debug-env', (req, res) => {
+  res.type('text/plain').send([
+    'EMAIL_FROM: ' + (process.env.EMAIL_FROM || '(empty)'),
+    'EMAIL_HOST: ' + (process.env.EMAIL_HOST || '(empty)'),
+    'EMAIL_PORT: ' + (process.env.EMAIL_PORT || '(empty)'),
+    'EMAIL_SECURE: ' + (process.env.EMAIL_SECURE || '(empty)'),
+    'EMAIL_USER: ' + (process.env.EMAIL_USER || '(empty)'),
+    'EMAIL_PASS: ' + (process.env.EMAIL_PASS ? '(set)' : '(empty)'),
+  ].join('\n'));
+});
+
 app.get('/voice', wrapRoute((req, res) => {
   res.type('text/xml');
   res.send(buildVoiceTwiml(req));
