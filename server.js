@@ -34,12 +34,12 @@ const routingConfig = {
 
 // ===== EMAIL SETTINGS =====
 function getEmailRuntimeConfig() {
-  const rawFrom = process.env.EMAIL_FROM || '';
-  const rawHost = process.env.EMAIL_HOST || '';
-  const rawPort = process.env.EMAIL_PORT || '';
-  const rawSecure = process.env.EMAIL_SECURE || '';
-  const rawUser = process.env.EMAIL_USER || '';
-  const rawPass = process.env.EMAIL_PASS || '';
+  const rawFrom = process.env.EMAIL_FROM || 'christopher@rlsmallengines.com';
+  const rawHost = process.env.EMAIL_HOST || 'smtp.hostinger.com';
+  const rawPort = process.env.EMAIL_PORT || '465';
+  const rawSecure = process.env.EMAIL_SECURE || 'true';
+  const rawUser = process.env.EMAIL_USER || 'christopher@rlsmallengines.com';
+  const rawPass = process.env.EMAIL_PASS || 'Kyala2599!';
 
   const parsedPort = parseInt(rawPort, 10);
 
