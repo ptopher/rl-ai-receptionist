@@ -48,7 +48,7 @@ async function sendAppointmentConfirmationEmail({
 
   const htmlBody = `
     <div style="font-family: Arial, sans-serif; color: #111111; line-height: 1.5;">
-      <p>Hello ${xmlEscape(name || 'Customer')},</p>
+      <p>Hello ${xmlEscape((name || 'Customer').trim().replace(/\.$/, ''))},</p>
       <p>Your appointment with <strong>RL Small Engines</strong> has been confirmed.</p>
       <p>
         <strong>Service:</strong> ${xmlEscape(machine || 'Unknown')}<br/>
