@@ -33,42 +33,71 @@ const routingConfig = {
 };
 
 // ===== EMAIL SETTINGS =====
-const emailConfig = {
-  from: process.env.EMAIL_FROM || '',
-  host: process.env.EMAIL_HOST || '',
-  port: parseInt(process.env.EMAIL_PORT || '587', 10),
-  secure: String(process.env.EMAIL_SECURE || 'false').toLowerCase() === 'true',
-  user: process.env.EMAIL_USER || '',
-  pass: process.env.EMAIL_PASS || ''
-};
+function getEmailRuntimeConfig() {
+  const rawFrom = process.env.EMAIL_FROM || '';
+  const rawHost = process.env.EMAIL_HOST || '';
+  const rawPort = process.env.EMAIL_PORT || '';
+  const rawSecure = process.env.EMAIL_SECURE || '';
+  const rawUser = process.env.EMAIL_USER || '';
+  const rawPass = process.env.EMAIL_PASS || '';
+
+  const parsedPort = parseInt(rawPort, 10);
+
+  return {
+    from: rawFrom,
+    host: rawHost,
+    port: parsedPort,
+    secure: String(rawSecure).toLowerCase() === 'true',
+    user: rawUser,
+    pass: rawPass,
+    rawPort,
+    rawSecure
+  };
+}
 
 function canSendEmail() {
+  const cfg = getEmailRuntimeConfig();
+
   return Boolean(
-    emailConfig.from &&
-    emailConfig.host &&
-    emailConfig.port &&
-    emailConfig.user &&
-    emailConfig.pass
+    cfg.from &&
+    cfg.host &&
+    cfg.port &&
+    !Number.isNaN(cfg.port) &&
+    cfg.user &&
+    cfg.pass
   );
 }
 
 let mailTransporter = null;
+let lastTransporterKey = '';
 
 function getMailTransporter() {
+  const cfg = getEmailRuntimeConfig();
+
   if (!canSendEmail()) {
     return null;
   }
 
-  if (!mailTransporter) {
+  const transporterKey = JSON.stringify({
+    host: cfg.host,
+    port: cfg.port,
+    secure: cfg.secure,
+    user: cfg.user,
+    from: cfg.from
+  });
+
+  if (!mailTransporter || lastTransporterKey !== transporterKey) {
     mailTransporter = nodemailer.createTransport({
-      host: emailConfig.host,
-      port: emailConfig.port,
-      secure: emailConfig.secure,
+      host: cfg.host,
+      port: cfg.port,
+      secure: cfg.secure,
       auth: {
-        user: emailConfig.user,
-        pass: emailConfig.pass
+        user: cfg.user,
+        pass: cfg.pass
       }
     });
+
+    lastTransporterKey = transporterKey;
   }
 
   return mailTransporter;
@@ -83,6 +112,7 @@ async function sendAppointmentConfirmationEmail({
   serviceWindow,
   address
 }) {
+  const cfg = getEmailRuntimeConfig();
   const transporter = getMailTransporter();
 
   if (!transporter) {
@@ -126,7 +156,7 @@ async function sendAppointmentConfirmationEmail({
   console.log('Attempting appointment confirmation email to:', to);
 
   await transporter.sendMail({
-    from: emailConfig.from,
+    from: cfg.from,
     to,
     subject,
     text: textBody,
@@ -1387,31 +1417,57 @@ app.get('/', (req, res) => {
   res.send('RL AI Receptionist is running');
 });
 
-// ===== NEW TEST EMAIL ROUTE =====
+// ===== TEST EMAIL ROUTE =====
 app.get('/test-email', wrapRoute(async (req, res) => {
-  const to = req.query.to || emailConfig.user || emailConfig.from;
+  const cfg = getEmailRuntimeConfig();
+  const to = req.query.to || cfg.user || cfg.from;
+
+  const debug = {
+    hasFrom: Boolean(cfg.from),
+    hasHost: Boolean(cfg.host),
+    hasUser: Boolean(cfg.user),
+    hasPass: Boolean(cfg.pass),
+    hasRawPort: Boolean(cfg.rawPort),
+    parsedPort: cfg.port,
+    portIsValid: !Number.isNaN(cfg.port) && Boolean(cfg.port),
+    rawSecure: cfg.rawSecure,
+    parsedSecure: cfg.secure,
+    canSendEmail: canSendEmail(),
+    chosenRecipient: to || ''
+  };
 
   if (!to) {
-    res.status(200).type('text/plain').send('TEST EMAIL FAILED: no recipient available');
+    res.status(200).type('text/plain').send(`TEST EMAIL FAILED: no recipient available\n${JSON.stringify(debug, null, 2)}`);
     return;
   }
 
-  const result = await sendAppointmentConfirmationEmail({
-    to,
-    name: 'Test Customer',
-    machine: 'Snowblower',
-    issue: 'Test email check',
-    serviceDate: formatEasternDateKey(getEasternNow()),
-    serviceWindow: '10:00 to 12:00',
-    address: '1748 Old Georgetown Court Severn Maryland 21144'
-  });
-
-  if (result && result.sent) {
-    res.status(200).type('text/plain').send(`EMAIL SENT TO: ${to}`);
+  if (!canSendEmail()) {
+    res.status(200).type('text/plain').send(`TEST EMAIL FAILED: {"sent":false,"reason":"not_configured"}\n${JSON.stringify(debug, null, 2)}`);
     return;
   }
 
-  res.status(200).type('text/plain').send(`TEST EMAIL FAILED: ${JSON.stringify(result)}`);
+  try {
+    const result = await sendAppointmentConfirmationEmail({
+      to,
+      name: 'Test Customer',
+      machine: 'Snowblower',
+      issue: 'Test email check',
+      serviceDate: formatEasternDateKey(getEasternNow()),
+      serviceWindow: '10:00 to 12:00',
+      address: '1748 Old Georgetown Court Severn Maryland 21144'
+    });
+
+    if (result && result.sent) {
+      res.status(200).type('text/plain').send(`EMAIL SENT TO: ${to}\n${JSON.stringify(debug, null, 2)}`);
+      return;
+    }
+
+    res.status(200).type('text/plain').send(`TEST EMAIL FAILED: ${JSON.stringify(result)}\n${JSON.stringify(debug, null, 2)}`);
+  } catch (error) {
+    res.status(200).type('text/plain').send(
+      `TEST EMAIL FAILED WITH ERROR:\n${error && error.message ? error.message : String(error)}\n${JSON.stringify(debug, null, 2)}`
+    );
+  }
 }));
 
 app.get('/voice', wrapRoute((req, res) => {
