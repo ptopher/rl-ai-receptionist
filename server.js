@@ -91,6 +91,7 @@ function getMailTransporter() {
       host: cfg.host,
       port: cfg.port,
       secure: cfg.secure,
+      family: 4,
       auth: {
         user: cfg.user,
         pass: cfg.pass
