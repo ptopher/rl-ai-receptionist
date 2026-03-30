@@ -1,6 +1,5 @@
 const express = require('express');
 const fs = require('fs');
-const nodemailer = require('nodemailer');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const app = express();
 
@@ -32,77 +31,10 @@ const routingConfig = {
   fridaySaturdayAfternoonMax: 3
 };
 
-// ===== EMAIL SETTINGS =====
-function getEmailRuntimeConfig() {
-  const rawFrom = process.env.EMAIL_FROM || 'christopher@rlsmallengines.com';
-  const rawHost = process.env.EMAIL_HOST || 'smtp.hostinger.com';
-  const rawPort = process.env.EMAIL_PORT || '587';
-  const rawSecure = process.env.EMAIL_SECURE || 'false';
-  const rawUser = process.env.EMAIL_USER || 'christopher@rlsmallengines.com';
-  const rawPass = process.env.EMAIL_PASS || 'Kyala2599!';
-
-  const parsedPort = parseInt(rawPort, 10);
-
-  return {
-    from: rawFrom,
-    host: rawHost,
-    port: parsedPort,
-    secure: String(rawSecure).toLowerCase() === 'true',
-    user: rawUser,
-    pass: rawPass,
-    rawPort,
-    rawSecure
-  };
-}
-
-function canSendEmail() {
-  const cfg = getEmailRuntimeConfig();
-
-  return Boolean(
-    cfg.from &&
-    cfg.host &&
-    cfg.port &&
-    !Number.isNaN(cfg.port) &&
-    cfg.user &&
-    cfg.pass
-  );
-}
-
-let mailTransporter = null;
-let lastTransporterKey = '';
-
-function getMailTransporter() {
-  const cfg = getEmailRuntimeConfig();
-
-  if (!canSendEmail()) {
-    return null;
-  }
-
-  const transporterKey = JSON.stringify({
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure,
-    user: cfg.user,
-    from: cfg.from
-  });
-
-  if (!mailTransporter || lastTransporterKey !== transporterKey) {
-    mailTransporter = nodemailer.createTransport({
-      host: cfg.host,
-      port: cfg.port,
-      secure: cfg.secure,
-      family: 4,
-      auth: {
-        user: cfg.user,
-        pass: cfg.pass
-      }
-    });
-
-    lastTransporterKey = transporterKey;
-  }
-
-  return mailTransporter;
-}
+// ===== EMAIL SETTINGS (Resend) =====
+const RESEND_API_KEY = process.env.RESEND_API_KEY || 're_LEfu6Sqh_3J3g6SadCX1gNMFVbmkxXxAe';
+const EMAIL_FROM = process.env.EMAIL_FROM || 'RL Small Engines <christopher@rlsmallengines.com>';
+const EMAIL_TO_OVERRIDE = process.env.EMAIL_TO || '';
 
 async function sendAppointmentConfirmationEmail({
   to,
@@ -113,31 +45,8 @@ async function sendAppointmentConfirmationEmail({
   serviceWindow,
   address
 }) {
-  const cfg = getEmailRuntimeConfig();
-  const transporter = getMailTransporter();
-
-  if (!transporter) {
-    console.log('Email not sent: transporter not configured');
-    return { sent: false, reason: 'not_configured' };
-  }
-
   const readableDate = getReadableDate(serviceDate);
-
-  const subject = `RL Small Engines Appointment Confirmation - ${readableDate}`;
-  const textBody = [
-    `Hello ${name || 'Customer'},`,
-    '',
-    'Your appointment with RL Small Engines has been confirmed.',
-    '',
-    `Service: ${machine || 'Unknown'}`,
-    `Issue: ${issue || 'Unknown'}`,
-    `Date: ${readableDate || ''}`,
-    `Time Window: ${serviceWindow || ''}`,
-    `Address: ${address || ''}`,
-    '',
-    'Thank you,',
-    'RL Small Engines'
-  ].join('\n');
+  const recipient = EMAIL_TO_OVERRIDE || to;
 
   const htmlBody = `
     <div style="font-family: Arial, sans-serif; color: #111111; line-height: 1.5;">
@@ -154,20 +63,33 @@ async function sendAppointmentConfirmationEmail({
     </div>
   `;
 
-  console.log('Attempting appointment confirmation email to:', to);
+  console.log('Attempting Resend email to:', recipient);
 
-  await transporter.sendMail({
-    from: cfg.from,
-    to,
-    subject,
-    text: textBody,
-    html: htmlBody
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: EMAIL_FROM,
+      to: [recipient],
+      subject: `RL Small Engines Appointment Confirmation - ${readableDate}`,
+      html: htmlBody
+    })
   });
 
-  console.log('Appointment confirmation email sent successfully to:', to);
+  const data = await response.json();
 
-  return { sent: true };
+  if (!response.ok) {
+    console.error('Resend error:', data);
+    throw new Error(data.message || 'Resend API error');
+  }
+
+  console.log('Resend email sent successfully, id:', data.id);
+  return { sent: true, id: data.id };
 }
+
 
 // ===== COUNTY ZIP MAPS =====
 const countyZips = {
@@ -192,7 +114,6 @@ const countyZips = {
   ]
 };
 
-// ===== LOCAL CORRECTION LAYER =====
 const exactPhraseCorrections = [
   ['bevern', 'severn'],
   ['seven maryland', 'severn maryland'],
@@ -1420,32 +1341,7 @@ app.get('/', (req, res) => {
 
 // ===== TEST EMAIL ROUTE =====
 app.get('/test-email', wrapRoute(async (req, res) => {
-  const cfg = getEmailRuntimeConfig();
-  const to = req.query.to || cfg.user || cfg.from;
-
-  const debug = {
-    hasFrom: Boolean(cfg.from),
-    hasHost: Boolean(cfg.host),
-    hasUser: Boolean(cfg.user),
-    hasPass: Boolean(cfg.pass),
-    hasRawPort: Boolean(cfg.rawPort),
-    parsedPort: cfg.port,
-    portIsValid: !Number.isNaN(cfg.port) && Boolean(cfg.port),
-    rawSecure: cfg.rawSecure,
-    parsedSecure: cfg.secure,
-    canSendEmail: canSendEmail(),
-    chosenRecipient: to || ''
-  };
-
-  if (!to) {
-    res.status(200).type('text/plain').send(`TEST EMAIL FAILED: no recipient available\n${JSON.stringify(debug, null, 2)}`);
-    return;
-  }
-
-  if (!canSendEmail()) {
-    res.status(200).type('text/plain').send(`TEST EMAIL FAILED: {"sent":false,"reason":"not_configured"}\n${JSON.stringify(debug, null, 2)}`);
-    return;
-  }
+  const to = req.query.to || 'christopher@rlsmallengines.com';
 
   try {
     const result = await sendAppointmentConfirmationEmail({
@@ -1458,16 +1354,9 @@ app.get('/test-email', wrapRoute(async (req, res) => {
       address: '1748 Old Georgetown Court Severn Maryland 21144'
     });
 
-    if (result && result.sent) {
-      res.status(200).type('text/plain').send(`EMAIL SENT TO: ${to}\n${JSON.stringify(debug, null, 2)}`);
-      return;
-    }
-
-    res.status(200).type('text/plain').send(`TEST EMAIL FAILED: ${JSON.stringify(result)}\n${JSON.stringify(debug, null, 2)}`);
+    res.status(200).type('text/plain').send('EMAIL SENT TO: ' + to + ' id: ' + result.id);
   } catch (error) {
-    res.status(200).type('text/plain').send(
-      `TEST EMAIL FAILED WITH ERROR:\n${error && error.message ? error.message : String(error)}\n${JSON.stringify(debug, null, 2)}`
-    );
+    res.status(200).type('text/plain').send('TEST EMAIL FAILED: ' + (error && error.message ? error.message : String(error)));
   }
 }));
 
