@@ -33,8 +33,7 @@ const routingConfig = {
 
 // ===== EMAIL SETTINGS (Resend) =====
 const RESEND_API_KEY = process.env.RESEND_API_KEY || 're_LEfu6Sqh_3J3g6SadCX1gNMFVbmkxXxAe';
-const EMAIL_FROM = process.env.EMAIL_FROM || 'RL Small Engines <christopher@rlsmallengines.com>';
-const EMAIL_TO_OVERRIDE = process.env.EMAIL_TO || '';
+const RESEND_FROM = process.env.EMAIL_FROM || 'RL Small Engines <christopher@rlsmallengines.com>';
 
 async function sendAppointmentConfirmationEmail({
   to,
@@ -46,7 +45,6 @@ async function sendAppointmentConfirmationEmail({
   address
 }) {
   const readableDate = getReadableDate(serviceDate);
-  const recipient = EMAIL_TO_OVERRIDE || to;
 
   const htmlBody = `
     <div style="font-family: Arial, sans-serif; color: #111111; line-height: 1.5;">
@@ -63,7 +61,7 @@ async function sendAppointmentConfirmationEmail({
     </div>
   `;
 
-  console.log('Attempting Resend email to:', recipient);
+  console.log('Attempting Resend email to:', to);
 
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -72,8 +70,8 @@ async function sendAppointmentConfirmationEmail({
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      from: EMAIL_FROM,
-      to: [recipient],
+      from: RESEND_FROM,
+      to: [to],
       subject: `RL Small Engines Appointment Confirmation - ${readableDate}`,
       html: htmlBody
     })
@@ -89,7 +87,6 @@ async function sendAppointmentConfirmationEmail({
   console.log('Resend email sent successfully, id:', data.id);
   return { sent: true, id: data.id };
 }
-
 
 // ===== COUNTY ZIP MAPS =====
 const countyZips = {
@@ -114,6 +111,7 @@ const countyZips = {
   ]
 };
 
+// ===== LOCAL CORRECTION LAYER =====
 const exactPhraseCorrections = [
   ['bevern', 'severn'],
   ['seven maryland', 'severn maryland'],
@@ -1353,23 +1351,11 @@ app.get('/test-email', wrapRoute(async (req, res) => {
       serviceWindow: '10:00 to 12:00',
       address: '1748 Old Georgetown Court Severn Maryland 21144'
     });
-
     res.status(200).type('text/plain').send('EMAIL SENT TO: ' + to + ' id: ' + result.id);
   } catch (error) {
     res.status(200).type('text/plain').send('TEST EMAIL FAILED: ' + (error && error.message ? error.message : String(error)));
   }
 }));
-
-app.get('/debug-env', (req, res) => {
-  res.type('text/plain').send([
-    'EMAIL_FROM: ' + (process.env.EMAIL_FROM || '(empty)'),
-    'EMAIL_HOST: ' + (process.env.EMAIL_HOST || '(empty)'),
-    'EMAIL_PORT: ' + (process.env.EMAIL_PORT || '(empty)'),
-    'EMAIL_SECURE: ' + (process.env.EMAIL_SECURE || '(empty)'),
-    'EMAIL_USER: ' + (process.env.EMAIL_USER || '(empty)'),
-    'EMAIL_PASS: ' + (process.env.EMAIL_PASS ? '(set)' : '(empty)'),
-  ].join('\n'));
-});
 
 app.get('/voice', wrapRoute((req, res) => {
   res.type('text/xml');
