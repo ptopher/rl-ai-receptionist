@@ -2970,7 +2970,8 @@ wss.on('connection', (ws, req) => {
     zip: '',
     awaitingZipConfirmation: false,
     zipConfirmed: false,
-    askedForSchedule: false
+    askedForSchedule: false,
+    inScheduling: false
   };
   console.log('ConversationRelay connected');
   ws.on('message', async (message) => {
@@ -3053,9 +3054,21 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
+          // 7. Schedule question after ZIP is confirmed
           if (callState.askedForSchedule) {
-            const wantsSchedule = cleaned.includes('yes') || cleaned.includes('schedule') || cleaned.includes('book') || cleaned.includes('appointment');
-            reply = wantsSchedule ? 'Okay. We can move forward with scheduling.' : 'Okay. If you change your mind, we can still help.';
+            const wantsSchedule =
+              cleaned.includes('yes') ||
+              cleaned.includes('schedule') ||
+              cleaned.includes('book') ||
+              cleaned.includes('appointment');
+            if (wantsSchedule) {
+              callState.askedForSchedule = false;
+              callState.inScheduling = true;
+              reply = 'Our next available days are Tuesday at 10am, Wednesday at 1pm, or Thursday at 3pm. Which works for you?';
+            } else {
+              callState.askedForSchedule = false;
+              reply = 'Okay. If you change your mind, we can still help.';
+            }
             ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
             break;
           }
