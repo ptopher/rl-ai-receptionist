@@ -1380,7 +1380,7 @@ function buildVoiceTwiml(req) {
   return `
 <Response>
   <Gather input="speech" action="${xmlEscape(helpUrl)}" method="POST" speechTimeout="auto" timeout="6">
-    ${say("Hello, you have reached R L Small Engines. My name is Emma. How can I help you today?")}
+    ${say("Thanks for calling RL Small Engines. What can I help you with today?")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
