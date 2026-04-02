@@ -2926,7 +2926,6 @@ const server = app.listen(PORT, () => {
 // Attach WebSocket server to same HTTP server
 const wss = new WebSocket.Server({ server });
 wss.on('connection', (ws, req) => {
-  let conversation = [];
   console.log('ConversationRelay connected');
   ws.on('message', async (message) => {
     try {
@@ -2938,25 +2937,14 @@ wss.on('connection', (ws, req) => {
         case 'prompt': {
           const userText = data.voicePrompt || '';
           console.log('Caller said:', userText);
-          conversation.push({ role: 'user', content: userText });
-          const response = await fetch('https://api.openai.com/v1/responses', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${OPENAI_API_KEY}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              model: 'gpt-4.1-mini',
-              input: [
-                { role: 'system', content: SYSTEM_PROMPT },
-                ...conversation
-              ]
-            })
-          });
-          const dataRes = await response.json();
-          const reply = dataRes.output_text || "Got it.";
-          conversation.push({ role: 'assistant', content: reply });
-          ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+
+          const reply = await getAIResponse(userText);
+
+          ws.send(JSON.stringify({
+            type: 'text',
+            token: reply,
+            last: true
+          }));
           break;
         }
         case 'interrupt':
