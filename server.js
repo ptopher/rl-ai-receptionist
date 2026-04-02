@@ -1,5 +1,6 @@
 const express = require('express');
 const fs = require('fs');
+const WebSocket = require('ws');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const app = express();
 
@@ -1375,17 +1376,20 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
 
 // ===== CALL FLOW START =====
 function buildVoiceTwiml(req) {
-  const helpUrl = absoluteUrl(req, '/getHelpRequest');
+  const wsUrl = `wss://${req.get('host')}/conversation-relay`;
 
   return `
 <Response>
-  <Gather input="speech" action="${xmlEscape(helpUrl)}" method="POST" speechTimeout="auto" timeout="6">
-    ${say("Thanks for calling RL Small Engines. What can I help you with today?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
+  <Connect>
+    <ConversationRelay
+      url="${xmlEscape(wsUrl)}"
+      welcomeGreeting="Thanks for calling RL Small Engines. What can I help you with today?"
+    />
+  </Connect>
 </Response>
 `.trim();
 }
+
 
 app.get('/', (req, res) => {
   res.send('RL AI Receptionist is running');
@@ -2915,6 +2919,31 @@ process.on('uncaughtException', (error) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log('Server running on port ' + PORT);
+// Create HTTP server
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+// Attach WebSocket server to same HTTP server
+const wss = new WebSocket.Server({ server });
+wss.on('connection', (ws, req) => {
+  console.log('ConversationRelay connected');
+  ws.on('message', async (message) => {
+    try {
+      const data = JSON.parse(message.toString());
+      if (data.type === 'message') {
+        const userText = data.text || '';
+        console.log('Caller said:', userText);
+        const reply = await getAIResponse(userText);
+        ws.send(JSON.stringify({
+          type: 'message',
+          text: reply
+        }));
+      }
+    } catch (err) {
+      console.error('WebSocket error:', err);
+    }
+  });
+  ws.on('close', () => {
+    console.log('ConversationRelay disconnected');
+  });
 });
