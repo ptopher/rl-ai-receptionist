@@ -2930,14 +2930,27 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message.toString());
-      if (data.type === 'input_text') {
-        const userText = data.input_text || '';
-        console.log('Caller said:', userText);
-        const reply = await getAIResponse(userText);
-        ws.send(JSON.stringify({
-          type: 'message',
-          text: reply
-        }));
+      switch (data.type) {
+        case 'setup':
+          console.log('ConversationRelay setup');
+          break;
+        case 'prompt': {
+          const userText = data.voicePrompt || '';
+          console.log('Caller said:', userText);
+          const reply = await getAIResponse(userText);
+          ws.send(JSON.stringify({
+            type: 'text',
+            token: reply,
+            last: true
+          }));
+          break;
+        }
+        case 'interrupt':
+          console.log('Caller interrupted playback');
+          break;
+        default:
+          console.log('Unhandled ConversationRelay event:', data.type);
+          break;
       }
     } catch (err) {
       console.error('WebSocket error:', err);
