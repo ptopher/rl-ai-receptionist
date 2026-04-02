@@ -1,5 +1,6 @@
 const express = require('express');
 const fs = require('fs');
+const WebSocket = require('ws');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const app = express();
 
@@ -58,7 +59,7 @@ async function getAIResponse(userInput) {
     throw new Error(data.error?.message || 'OpenAI request failed');
   }
 
-  return data.output[0].content[0].text;
+  return data.output_text || 'Okay, tell me a little more about that.';
 }
 
 
@@ -87,7 +88,7 @@ const routingConfig = {
 
 // ===== EMAIL SETTINGS (Resend) =====
 const RESEND_API_KEY = process.env.RESEND_API_KEY || 're_LEfu6Sqh_3J3g6SadCX1gNMFVbmkxXxAe';
-const RESEND_FROM = process.env.EMAIL_FROM || 'RL Small Engines <christopher@rlsmallengines.com>';
+const RESEND_FROM = process.env.RESEND_FROM || 'RL Small Engines <christopher@rlsmallengines.com>';
 
 async function sendAppointmentConfirmationEmail({
   to,
@@ -1375,17 +1376,20 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
 
 // ===== CALL FLOW START =====
 function buildVoiceTwiml(req) {
-  const helpUrl = absoluteUrl(req, '/getHelpRequest');
+  const wsUrl = `wss://${req.get('host')}/conversation-relay`;
 
   return `
 <Response>
-  <Gather input="speech" action="${xmlEscape(helpUrl)}" method="POST" speechTimeout="auto" timeout="6">
-    ${say("Hello, you have reached R L Small Engines. My name is Emma. How can I help you today?")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
+  <Connect>
+    <ConversationRelay
+      url="${xmlEscape(wsUrl)}"
+      welcomeGreeting="Thanks for calling RL Small Engines. What can I help you with today?"
+    />
+  </Connect>
 </Response>
 `.trim();
 }
+
 
 app.get('/', (req, res) => {
   res.send('RL AI Receptionist is running');
@@ -1427,7 +1431,7 @@ app.post('/voice', wrapRoute((req, res) => {
 }));
 
 // ===== STEP 1: HELP REQUEST / EXTRACT MACHINE =====
-app.post('/getHelpRequest', wrapRoute((req, res) => {
+app.post('/getHelpRequest', wrapRoute(async (req, res) => {
   const helpRequest = req.body.SpeechResult || '';
   const detectedMachine = detectMachine(helpRequest);
 
@@ -1437,14 +1441,29 @@ app.post('/getHelpRequest', wrapRoute((req, res) => {
     `/getIssue?machine=${encodeURIComponent(detectedMachine || '')}`
   );
 
+  let aiReply = '';
+
+  try {
+    if (!detectedMachine) {
+      aiReply = await getAIResponse(
+        `Customer said: "${helpRequest}". The machine type is unclear. Reply in one short natural sentence asking what type of equipment they need help with. Do not ask about brand, model, ZIP code, phone number, address, email, or scheduling yet.`
+      );
+    } else {
+      aiReply = await getAIResponse(
+        `Customer said: "${helpRequest}". The detected machine is "${detectedMachine}". Reply in one short natural sentence acknowledging that machine and asking them to briefly describe the problem. Do not ask about brand, model, ZIP code, phone number, address, email, or scheduling yet.`
+      );
+    }
+  } catch (error) {
+    console.error('AI getHelpRequest error:', error);
+  }
+
   res.type('text/xml');
 
   if (!detectedMachine) {
     res.send(`
 <Response>
-  ${say("Sorry, I could not tell what machine you need help with.")}
   <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="6">
-    ${say("Please tell me what machine you need help with, like a lawnmower, riding mower, generator, pressure washer, or snowblower.")}
+    ${say(aiReply || "I want to make sure I got the right equipment. What type of machine do you need help with?")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
@@ -1454,9 +1473,8 @@ app.post('/getHelpRequest', wrapRoute((req, res) => {
 
   res.send(`
 <Response>
-  ${say("Got it. I can help you with that.")}
   <Gather input="speech" action="${xmlEscape(issueUrl)}" method="POST" speechTimeout="auto" timeout="6">
-    ${say(`Please briefly describe the problem with your ${detectedMachine}.`)}
+    ${say(aiReply || `Got it. Please briefly describe the problem with your ${detectedMachine}.`)}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
@@ -2901,6 +2919,58 @@ process.on('uncaughtException', (error) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log('Server running on port ' + PORT);
+// Create HTTP server
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+// Attach WebSocket server to same HTTP server
+const wss = new WebSocket.Server({ server });
+wss.on('connection', (ws, req) => {
+  let conversation = [];
+  console.log('ConversationRelay connected');
+  ws.on('message', async (message) => {
+    try {
+      const data = JSON.parse(message.toString());
+      switch (data.type) {
+        case 'setup':
+          console.log('ConversationRelay setup');
+          break;
+        case 'prompt': {
+          const userText = data.voicePrompt || '';
+          console.log('Caller said:', userText);
+          conversation.push({ role: 'user', content: userText });
+          const response = await fetch('https://api.openai.com/v1/responses', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: 'gpt-4.1-mini',
+              input: [
+                { role: 'system', content: SYSTEM_PROMPT },
+                ...conversation
+              ]
+            })
+          });
+          const dataRes = await response.json();
+          const reply = dataRes.output_text || "Got it.";
+          conversation.push({ role: 'assistant', content: reply });
+          ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+          break;
+        }
+        case 'interrupt':
+          console.log('Caller interrupted playback');
+          break;
+        default:
+          console.log('Unhandled ConversationRelay event:', data.type);
+          break;
+      }
+    } catch (err) {
+      console.error('WebSocket error:', err);
+    }
+  });
+  ws.on('close', () => {
+    console.log('ConversationRelay disconnected');
+  });
 });
