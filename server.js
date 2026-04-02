@@ -2971,7 +2971,9 @@ wss.on('connection', (ws, req) => {
     awaitingZipConfirmation: false,
     zipConfirmed: false,
     askedForSchedule: false,
-    inScheduling: false
+    inScheduling: false,
+    offeredSlots: [],
+    selectedSlot: null
   };
   console.log('ConversationRelay connected');
   ws.on('message', async (message) => {
@@ -3064,11 +3066,50 @@ wss.on('connection', (ws, req) => {
             if (wantsSchedule) {
               callState.askedForSchedule = false;
               callState.inScheduling = true;
-              reply = 'Our next available days are Tuesday at 10am, Wednesday at 1pm, or Thursday at 3pm. Which works for you?';
+              const slots = await findAvailableSlots(callState.zip, 1, 3);
+              callState.offeredSlots = slots;
+              if (!slots.length) {
+                reply = 'Sorry, there are no available appointments right now.';
+              } else {
+                let slotSpeech = 'Here are the next available appointments. ';
+                slots.forEach((slot, index) => {
+                  slotSpeech += `Option ${index + 1}, ${slot.readableDate}, between ${slot.serviceWindow}. `;
+                });
+                slotSpeech += 'Please say or press option 1, 2, or 3.';
+                reply = slotSpeech;
+              }
             } else {
               callState.askedForSchedule = false;
               reply = 'Okay. If you change your mind, we can still help.';
             }
+            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+            break;
+          }
+
+          // 8. Scheduling option selection
+          if (callState.inScheduling && callState.offeredSlots.length) {
+            const selectedOption =
+              cleaned.includes('option 1') || cleaned === '1' || cleaned.includes('one')
+                ? 1
+                : cleaned.includes('option 2') || cleaned === '2' || cleaned.includes('two')
+                ? 2
+                : cleaned.includes('option 3') || cleaned === '3' || cleaned.includes('three')
+                ? 3
+                : 0;
+            if (!selectedOption) {
+              reply = 'Please say or press option 1, 2, or 3.';
+              ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+              break;
+            }
+            const chosenSlot = callState.offeredSlots[selectedOption - 1];
+            if (!chosenSlot) {
+              reply = 'That option is not available. Please say or press option 1, 2, or 3.';
+              ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+              break;
+            }
+            callState.selectedSlot = chosenSlot;
+            callState.inScheduling = false;
+            reply = `Great. You selected ${chosenSlot.readableDate}, between ${chosenSlot.serviceWindow}.`;
             ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
             break;
           }
