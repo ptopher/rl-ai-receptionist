@@ -2,60 +2,12 @@ const express = require('express');
 const fs = require('fs');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const app = express();
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 const JOBS_FILE = 'jobs.json';
-const SYSTEM_PROMPT = `
-You are Emma, the phone assistant for RL Small Engines.
 
-Speak naturally and professionally.
-
-Rules:
-- RL Small Engines is a mobile service only. No drop-off.
-- Pricing depends on the problem. Do not quote exact prices.
-- Keep callbacks to a minimum.
-- Get the machine and issue clearly.
-- Get the ZIP code before discussing scheduling.
-- If outside the service area, politely say so and stop scheduling.
-- Only follow supported machine and brand rules.
-- If the customer rambles, politely redirect and ask one question at a time.
-- Do not over-diagnose.
-- Offer up to 3 real appointment choices when scheduling.
-- Never promise squeeze-ins or call-backs if something opens up.
-- Sound natural, not robotic.
-`;
-async function getAIResponse(userInput) {
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: 'gpt-4.1-mini',
-      input: [
-        {
-          role: 'system',
-          content: SYSTEM_PROMPT
-        },
-        {
-          role: 'user',
-          content: userInput
-        }
-      ]
-    })
-  });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.error?.message || 'OpenAI request failed');
-  }
-
-  return data.output[0].content[0].text;
-}
 // ===== HOME / ROUTING SETTINGS =====
 const routingConfig = {
   homeZip: '20724',
@@ -96,7 +48,7 @@ async function sendAppointmentConfirmationEmail({
 
   const htmlBody = `
     <div style="font-family: Arial, sans-serif; color: #111111; line-height: 1.5;">
-      <p>Hello ${xmlEscape((name || 'Customer').trim().replace(/\.$/, ''))},</p>
+      <p>Hello ${xmlEscape(name || 'Customer')},</p>
       <p>Your appointment with <strong>RL Small Engines</strong> has been confirmed.</p>
       <p>
         <strong>Service:</strong> ${xmlEscape(machine || 'Unknown')}<br/>
@@ -1403,6 +1355,11 @@ app.get('/test-email', wrapRoute(async (req, res) => {
   } catch (error) {
     res.status(200).type('text/plain').send('TEST EMAIL FAILED: ' + (error && error.message ? error.message : String(error)));
   }
+}));
+
+app.get('/test-ai', wrapRoute(async (req, res) => {
+  const reply = await getAIResponse('Customer says: My riding mower will not start and I am in zip code 21144. What would you say next?');
+  res.status(200).type('text/plain').send(reply);
 }));
 
 app.get('/voice', wrapRoute((req, res) => {
