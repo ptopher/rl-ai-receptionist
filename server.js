@@ -854,6 +854,18 @@ function detectOptionSelection(req) {
   return null;
 }
 
+function detectYesNoText(text) {
+  const cleaned = cleanText(text);
+  if (cleaned.includes('yes') || cleaned.includes('correct') || cleaned.includes('that is correct') || cleaned.includes('sounds correct')) {
+    return 'yes';
+  }
+  if (cleaned.includes('no') || cleaned.includes('wrong') || cleaned.includes('not correct') || cleaned.includes('change it')) {
+    return 'no';
+  }
+  return '';
+}
+
+
 function detectCorrectionField(text) {
   const cleaned = cleanText(text);
 
@@ -2952,6 +2964,14 @@ const server = app.listen(PORT, () => {
 // Attach WebSocket server to same HTTP server
 const wss = new WebSocket.Server({ server });
 wss.on('connection', (ws, req) => {
+  const callState = {
+    machine: '',
+    issue: '',
+    zip: '',
+    awaitingZipConfirmation: false,
+    zipConfirmed: false,
+    askedForSchedule: false
+  };
   console.log('ConversationRelay connected');
   ws.on('message', async (message) => {
     try {
@@ -2962,16 +2982,89 @@ wss.on('connection', (ws, req) => {
           break;
         case 'prompt': {
           const userText = data.voicePrompt || '';
+          const cleaned = cleanText(userText);
           console.log('Caller said:', userText);
-          const reply = await getAIResponse(userText);
-          ws.send(JSON.stringify({
-            type: 'text',
-            token: reply,
-            last: true
-          }));
+          let reply = '';
+
+          if (callState.awaitingZipConfirmation) {
+            const zipDecision = detectYesNoText(userText);
+            if (zipDecision === 'yes') {
+              callState.awaitingZipConfirmation = false;
+              callState.zipConfirmed = true;
+              const matchingCounties = getCountyForZip(callState.zip);
+              if (!matchingCounties.length) {
+                reply = `Sorry, we do not service zip code ${callState.zip}.`;
+              } else {
+                reply = `Yes, we service zip code ${callState.zip}. Would you like to schedule an appointment?`;
+                callState.askedForSchedule = true;
+              }
+            } else if (zipDecision === 'no') {
+              callState.awaitingZipConfirmation = false;
+              callState.zip = '';
+              reply = 'Okay. What is your five digit zip code?';
+            } else {
+              reply = `I heard zip code ${callState.zip}. Is that correct?`;
+            }
+            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+            break;
+          }
+
+          if (!callState.machine) {
+            const detectedMachine = detectMachine(userText);
+            if (detectedMachine) callState.machine = detectedMachine;
+          }
+
+          if (!callState.machine) {
+            reply = 'What type of machine do you need help with?';
+            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+            break;
+          }
+
+          if (!callState.issue) {
+            const machineOnlyPhrases = ['lawnmower','lawn mower','mower','riding mower','lawn tractor','tractor','generator','pressure washer','power washer','snowblower','snow blower'];
+            const isMachineOnly = machineOnlyPhrases.includes(cleaned) || cleaned === cleanText(callState.machine);
+            const possibleZip = normalizeSpokenDigits(userText).slice(0, 5);
+            if (!isMachineOnly && possibleZip.length !== 5) {
+              if (cleaned.includes('start') || cleaned.includes('won t') || cleaned.includes('wont') || cleaned.includes('not') || cleaned.includes('smoke') || cleaned.includes('smoking') || cleaned.includes('stall') || cleaned.includes('stalls') || cleaned.includes('surge') || cleaned.includes('surging') || cleaned.includes('leak') || cleaned.includes('broken') || cleaned.includes('repair') || cleaned.includes('fixed') || cleaned.includes('fix') || cleaned.includes('blade') || cleaned.includes('belt') || cleaned.includes('carb') || cleaned.includes('starter') || cleaned.includes('pull cord') || cleaned.split(' ').length >= 4) {
+                callState.issue = userText.trim();
+              }
+            }
+          }
+
+          if (!callState.issue) {
+            reply = `What seems to be the issue with your ${callState.machine.toLowerCase()}?`;
+            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+            break;
+          }
+
+          if (!callState.zipConfirmed) {
+            const possibleZip = normalizeSpokenDigits(userText).slice(0, 5);
+            if (!callState.zip && possibleZip.length === 5) {
+              callState.zip = possibleZip;
+              callState.awaitingZipConfirmation = true;
+              reply = `I heard zip code ${callState.zip}. Is that correct?`;
+            } else if (!callState.zip) {
+              reply = 'What is your five digit zip code?';
+            } else {
+              reply = `I heard zip code ${callState.zip}. Is that correct?`;
+              callState.awaitingZipConfirmation = true;
+            }
+            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+            break;
+          }
+
+          if (callState.askedForSchedule) {
+            const wantsSchedule = cleaned.includes('yes') || cleaned.includes('schedule') || cleaned.includes('book') || cleaned.includes('appointment');
+            reply = wantsSchedule ? 'Okay. We can move forward with scheduling.' : 'Okay. If you change your mind, we can still help.';
+            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+            break;
+          }
+
+          reply = 'Okay.';
+          ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
           break;
         }
-        case 'interrupt':
+                case 'interrupt':
           console.log('Caller interrupted playback');
           break;
         default:
