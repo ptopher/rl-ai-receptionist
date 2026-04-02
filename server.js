@@ -41,25 +41,31 @@ async function getAIResponse(userInput) {
     body: JSON.stringify({
       model: 'gpt-4.1-mini',
       input: [
-        {
-          role: 'system',
-          content: SYSTEM_PROMPT
-        },
-        {
-          role: 'user',
-          content: userInput
-        }
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userInput }
       ]
     })
   });
-
   const data = await response.json();
-
   if (!response.ok) {
+    console.error('OpenAI error response:', JSON.stringify(data, null, 2));
     throw new Error(data.error?.message || 'OpenAI request failed');
   }
-
-  return data.output_text || 'Okay, tell me a little more about that.';
+  if (typeof data.output_text === 'string' && data.output_text.trim()) {
+    return data.output_text.trim();
+  }
+  if (Array.isArray(data.output)) {
+    for (const item of data.output) {
+      if (!item || !Array.isArray(item.content)) continue;
+      for (const part of item.content) {
+        if (part?.type === 'output_text' && typeof part.text === 'string' && part.text.trim()) {
+          return part.text.trim();
+        }
+      }
+    }
+  }
+  console.error('OpenAI response had no usable text:', JSON.stringify(data, null, 2));
+  return 'I got that. Tell me the main issue you are having with the machine.';
 }
 
 
@@ -2937,9 +2943,7 @@ wss.on('connection', (ws, req) => {
         case 'prompt': {
           const userText = data.voicePrompt || '';
           console.log('Caller said:', userText);
-
           const reply = await getAIResponse(userText);
-
           ws.send(JSON.stringify({
             type: 'text',
             token: reply,
