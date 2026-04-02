@@ -2930,8 +2930,8 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message.toString());
-      if (data.type === 'message') {
-        const userText = data.text || '';
+      if (data.type === 'input_text') {
+        const userText = data.input_text || '';
         console.log('Caller said:', userText);
         const reply = await getAIResponse(userText);
         ws.send(JSON.stringify({
