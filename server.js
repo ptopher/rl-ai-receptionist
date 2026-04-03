@@ -3094,19 +3094,21 @@ wss.on('connection', (ws, req) => {
           // --- Day/slot selection ---
           if (callState.inScheduling && !callState.dayConfirmed) {
             let matchedSlot = null;
-            const nt = cleaned;
-            if (nt.includes('option 1') || nt === '1' || nt.includes('one')) matchedSlot = callState.offeredSlots[0];
-            else if (nt.includes('option 2') || nt === '2' || nt.includes('two')) matchedSlot = callState.offeredSlots[1];
-            else if (nt.includes('option 3') || nt === '3' || nt.includes('three')) matchedSlot = callState.offeredSlots[2];
+            const nt = cleaned.replace(/[^a-z0-9 ]/g, '').trim();
+            const digits = nt.replace(/[^0-9]/g, '');
+            if (nt === 'option 1' || digits === '1' || nt === 'one' || nt === 'first') matchedSlot = callState.offeredSlots[0];
+            else if (nt === 'option 2' || digits === '2' || nt === 'two' || nt === 'second') matchedSlot = callState.offeredSlots[1];
+            else if (nt === 'option 3' || digits === '3' || nt === 'three' || nt === 'third') matchedSlot = callState.offeredSlots[2];
             if (!matchedSlot) {
               const days = ['monday','tuesday','wednesday','thursday','friday','saturday'];
-              const foundDay = days.find(d => text.includes(d));
+              const foundDay = days.find(d => nt === d || nt.startsWith(d));
               if (foundDay) matchedSlot = callState.offeredSlots.find(s => s.serviceDay.toLowerCase() === foundDay);
             }
             if (matchedSlot) {
               callState.selectedDay = matchedSlot.serviceDay;
               callState.serviceDate = matchedSlot.serviceDate;
               callState.timeWindow = matchedSlot.serviceWindow;
+              callState.inScheduling = false;
               let win;
               if (matchedSlot.serviceWindow === '10:00 to 10:30') win = 'ten to ten thirty in the morning';
               else if (matchedSlot.serviceWindow === '10:00 to 12:00') win = 'morning between ten and noon';
