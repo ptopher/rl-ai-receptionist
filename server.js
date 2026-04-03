@@ -1448,6 +1448,8 @@ function buildVoiceTwiml(req) {
     <ConversationRelay
       url="${xmlEscape(wsUrl)}"
       welcomeGreeting="Thanks for calling RL Small Engines. What can I help you with today?"
+      interruptByDtmf="false"
+      speechTimeout="2"
     />
   </Connect>
 </Response>
@@ -3010,7 +3012,8 @@ wss.on('connection', (ws, req) => {
     email: null,
     emailConfirmed: false,
     booked: false,
-    timeWindow: ''
+    timeWindow: '',
+    callerName: ''
   };
   console.log('ConversationRelay connected');
   ws.on('message', async (message) => {
@@ -3056,7 +3059,7 @@ wss.on('connection', (ws, req) => {
               ws.send(JSON.stringify({ type: "text", token: "Do you prefer morning or afternoon?", last: true }));
             } else {
               callState.timeWindow = '10:00 to 10:30';
-              ws.send(JSON.stringify({ type: "text", token: "That will be 10 to 10:30. What phone number should we use?", last: true }));
+              ws.send(JSON.stringify({ type: "text", token: "That will be 10 to 10:30. Can I get your first and last name?", last: true }));
             }
             break;
           }
@@ -3168,23 +3171,35 @@ wss.on('connection', (ws, req) => {
               (callState.selectedDay === 'Friday' || callState.selectedDay === 'Saturday')) {
             if (text.includes('morning')) {
               callState.timeWindow = '10:00 to 12:00';
-              ws.send(JSON.stringify({ type: 'text', token: 'Got it, morning works. What phone number should we use?', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'Got it, morning works. Can I get your first and last name?', last: true }));
             } else if (text.includes('afternoon')) {
               callState.timeWindow = '1:00 to 4:00';
-              ws.send(JSON.stringify({ type: 'text', token: 'Got it, afternoon works. What phone number should we use?', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'Got it, afternoon works. Can I get your first and last name?', last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: 'Do you prefer morning or afternoon?', last: true }));
             }
             break;
           }
 
-          // ===== STEP 5: COLLECT PHONE AFTER DAY CONFIRMED =====
+          // ===== STEP 5: COLLECT NAME =====
+          if (callState.dayConfirmed && !callState.callerName) {
+            const rawName = normalizeNameText(userText);
+            if (rawName && rawName.trim().length >= 2 && !/^\d+$/.test(rawName.trim())) {
+              callState.callerName = rawName;
+              ws.send(JSON.stringify({ type: 'text', token: `Got it, ${rawName}. What is the best phone number to reach you at?`, last: true }));
+            } else {
+              ws.send(JSON.stringify({ type: 'text', token: 'Can I get your first and last name please?', last: true }));
+            }
+            break;
+          }
+
+          // ===== STEP 5B: COLLECT PHONE =====
           if (callState.dayConfirmed && !callState.phone) {
             const possiblePhone = normalizeSpokenDigits(userText);
             const normalized = normalizeTenDigitPhone(possiblePhone);
             if (normalized.length === 10) {
               callState.phone = normalized;
-              const spoken = normalized.split('').join(', ');
+              const spoken = normalized.slice(0,3) + ', ' + normalized.slice(3,6) + ', ' + normalized.slice(6);
               ws.send(JSON.stringify({ type: 'text', token: `I got ${spoken}. Is that correct?`, last: true }));
               break;
             }
@@ -3251,7 +3266,7 @@ wss.on('connection', (ws, req) => {
               const job = {
                 id: generateJobId(),
                 requestType: 'Appointment Request',
-                name: 'Phone Caller',
+                name: callState.callerName || 'Phone Caller',
                 machine: callState.machine || 'Unknown',
                 problem: callState.issue || 'Unknown',
                 zip: callState.zip || '',
@@ -3269,7 +3284,7 @@ wss.on('connection', (ws, req) => {
               try {
                 await sendAppointmentConfirmationEmail({
                   to: callState.email,
-                  name: 'Customer',
+                  name: callState.callerName || 'Customer',
                   machine: callState.machine,
                   issue: callState.issue,
                   serviceDate: job.serviceDate || callState.selectedDay || '',
