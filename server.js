@@ -891,6 +891,27 @@ function rejoinSpacedDigits(text) {
   return String(text || '').replace(/\b(\d\s){2,}\d\b/g, (match) => match.replace(/\s/g, ''));
 }
 
+function getNextDateForDay(dayName) {
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const target = days.indexOf(dayName);
+  if (target === -1) return null;
+  const now = getEasternNow();
+  const current = now.getDay();
+  let diff = target - current;
+  if (diff <= 0) diff += 7;
+  const next = new Date(now);
+  next.setDate(now.getDate() + diff);
+  return formatEasternDateKey(next);
+}
+
+function formatStreetNumberForSpeech(address) {
+  return String(address || '').replace(/^(\d+)/, (num) => {
+    if (num.length === 4) return num.slice(0, 2) + ' ' + num.slice(2);
+    if (num.length === 3) return num.slice(0, 1) + ' ' + num.slice(1);
+    return num;
+  });
+}
+
 
 function detectCorrectionField(text) {
   const cleaned = cleanText(text);
@@ -3012,7 +3033,8 @@ wss.on('connection', (ws, req) => {
     emailConfirmed: false,
     booked: false,
     timeWindow: '',
-    callerName: ''
+    callerName: '',
+    serviceDate: ''
   };
   console.log('ConversationRelay connected');
   ws.on('message', async (message) => {
@@ -3058,6 +3080,7 @@ wss.on('connection', (ws, req) => {
               ws.send(JSON.stringify({ type: "text", token: "Do you prefer morning or afternoon?", last: true }));
             } else {
               callState.timeWindow = '10:00 to 10:30';
+              callState.serviceDate = getNextDateForDay(callState.selectedDay);
               ws.send(JSON.stringify({ type: "text", token: "That will be 10 to 10:30. Can I get your first and last name?", last: true }));
             }
             break;
@@ -3170,9 +3193,11 @@ wss.on('connection', (ws, req) => {
               (callState.selectedDay === 'Friday' || callState.selectedDay === 'Saturday')) {
             if (text.includes('morning')) {
               callState.timeWindow = '10:00 to 12:00';
+              callState.serviceDate = getNextDateForDay(callState.selectedDay);
               ws.send(JSON.stringify({ type: 'text', token: 'Got it, morning works. Can I get your first and last name?', last: true }));
             } else if (text.includes('afternoon')) {
               callState.timeWindow = '1:00 to 4:00';
+              callState.serviceDate = getNextDateForDay(callState.selectedDay);
               ws.send(JSON.stringify({ type: 'text', token: 'Got it, afternoon works. Can I get your first and last name?', last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: 'Do you prefer morning or afternoon?', last: true }));
@@ -3223,7 +3248,7 @@ wss.on('connection', (ws, req) => {
             const rawAddress = String(userText || '').trim();
             if (rawAddress.length >= 5) {
               callState.address = normalizeAddressText(applyLocalCorrections(rejoinSpacedDigits(rawAddress)));
-              const addrForSpeech = callState.address.replace(/\b(\d{4,})\b/g, (n) => n.slice(0,-2) + ' ' + n.slice(-2));
+              const addrForSpeech = formatStreetNumberForSpeech(callState.address);
               ws.send(JSON.stringify({ type: 'text', token: `I have your address as ${addrForSpeech}. Is that correct?`, last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: 'What is the service address?', last: true }));
@@ -3273,7 +3298,7 @@ wss.on('connection', (ws, req) => {
                 phone: callState.phone || '',
                 address: callState.address || '',
                 email: callState.email || '',
-                serviceDate: callState.selectedDay || '',
+                serviceDate: callState.serviceDate || '',
                 serviceDay: callState.selectedDay || '',
                 serviceWindow: callState.timeWindow || (callState.selectedDay === 'Monday' || callState.selectedDay === 'Tuesday' || callState.selectedDay === 'Wednesday' || callState.selectedDay === 'Thursday' ? '10:00 to 10:30' : ''),
                 time: getEasternTimestamp()
@@ -3287,7 +3312,7 @@ wss.on('connection', (ws, req) => {
                   name: callState.callerName || 'Phone Caller',
                   machine: callState.machine,
                   issue: callState.issue,
-                  serviceDate: job.serviceDate || callState.selectedDay || '',
+                  serviceDate: job.serviceDate || '',
                   serviceWindow: job.serviceWindow || callState.timeWindow || (callState.selectedDay === 'Monday' || callState.selectedDay === 'Tuesday' || callState.selectedDay === 'Wednesday' || callState.selectedDay === 'Thursday' ? '10:00 to 10:30' : ''),
                   address: callState.address
                 });
@@ -3295,9 +3320,8 @@ wss.on('connection', (ws, req) => {
                 console.error('Email send failed:', err);
               }
 
-              const dayLine = callState.selectedSlot
-                ? `on ${callState.selectedSlot.readableDate} between ${callState.selectedSlot.serviceWindow}`
-                : `on ${callState.selectedDay || 'the selected day'}`;
+              const readableSvcDate = callState.serviceDate ? getReadableDate(callState.serviceDate) : (callState.selectedDay || 'the selected day');
+              const dayLine = `on ${readableSvcDate} between ${callState.timeWindow || ''}`;
 
               ws.send(JSON.stringify({ type: 'text', token: `You are all set. Your appointment is confirmed ${dayLine}. We will send a confirmation to ${formatEmailForSpeech(callState.email)}. Thank you and have a great day.`, last: true }));
               callState.booked = true;
