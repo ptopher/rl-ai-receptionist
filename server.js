@@ -2991,7 +2991,9 @@ wss.on('connection', (ws, req) => {
     askedForSchedule: false,
     inScheduling: false,
     offeredSlots: [],
-    selectedSlot: null
+    selectedSlot: null,
+    selectedDay: null,
+    dayConfirmed: false
   };
   console.log('ConversationRelay connected');
   ws.on('message', async (message) => {
@@ -3011,6 +3013,42 @@ wss.on('connection', (ws, req) => {
           if (cleaned === '2') normalizedText = 'wednesday';
           if (cleaned === '3') normalizedText = 'friday';
           let reply = '';
+
+          const text = data.voicePrompt?.toLowerCase() || "";
+
+          // ===== STEP 1: DETECT DAY =====
+          let detectedDay = null;
+          if (text.includes("monday")) detectedDay = "Monday";
+          else if (text.includes("tuesday")) detectedDay = "Tuesday";
+          else if (text.includes("wednesday")) detectedDay = "Wednesday";
+          else if (text.includes("thursday")) detectedDay = "Thursday";
+          else if (text.includes("friday")) detectedDay = "Friday";
+          else if (text.includes("saturday")) detectedDay = "Saturday";
+
+          // ===== STEP 2: IF USER SAID A DAY =====
+          if (callState.inScheduling && detectedDay && !callState.dayConfirmed) {
+            callState.selectedDay = detectedDay;
+            ws.send(JSON.stringify({ type: "response", text: `Got it, ${detectedDay}. Does that sound right?` }));
+            break;
+          }
+
+          // ===== STEP 3: HANDLE YES =====
+          if (callState.selectedDay && !callState.dayConfirmed && text.includes("yes")) {
+            callState.dayConfirmed = true;
+            if (callState.selectedDay === "Friday" || callState.selectedDay === "Saturday") {
+              ws.send(JSON.stringify({ type: "response", text: "Do you prefer morning or afternoon?" }));
+            } else {
+              ws.send(JSON.stringify({ type: "response", text: "That will be 10 to 10:30. What phone number should we use?" }));
+            }
+            break;
+          }
+
+          // ===== STEP 4: HANDLE NO =====
+          if (callState.selectedDay && !callState.dayConfirmed && text.includes("no")) {
+            callState.selectedDay = null;
+            ws.send(JSON.stringify({ type: "response", text: "Okay, no problem. Which day works better for you?" }));
+            break;
+          }
 
           if (callState.awaitingZipConfirmation) {
             const zipDecision = detectYesNoText(userText);
