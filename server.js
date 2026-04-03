@@ -2997,7 +2997,10 @@ wss.on('connection', (ws, req) => {
     phone: null,
     phoneConfirmed: false,
     address: null,
-    addressConfirmed: false
+    addressConfirmed: false,
+    email: null,
+    emailConfirmed: false,
+    booked: false
   };
   console.log('ConversationRelay connected');
   ws.on('message', async (message) => {
@@ -3196,6 +3199,75 @@ wss.on('connection', (ws, req) => {
               callState.address = null;
               ws.send(JSON.stringify({ type: 'text', token: 'Okay. What is the correct service address?', last: true }));
             }
+            break;
+          }
+
+          // ===== STEP 9: COLLECT EMAIL =====
+          if (callState.addressConfirmed && !callState.email) {
+            const rawEmail = extractEmailFromSpeech(req);
+            if (rawEmail && rawEmail.includes('@')) {
+              callState.email = rawEmail;
+              const spoken = formatEmailForSpeech(rawEmail);
+              ws.send(JSON.stringify({ type: 'text', token: `I have your email as ${spoken}. Is that correct?`, last: true }));
+            } else {
+              ws.send(JSON.stringify({ type: 'text', token: 'What email address should we send the confirmation to?', last: true }));
+            }
+            break;
+          }
+
+          // ===== STEP 10: CONFIRM EMAIL =====
+          if (callState.email && !callState.emailConfirmed) {
+            if (text.includes('yes') || text.includes('correct')) {
+              callState.emailConfirmed = true;
+
+              // Save the job
+              const job = {
+                id: generateJobId(),
+                requestType: 'Appointment Request',
+                name: 'Phone Caller',
+                machine: callState.machine || 'Unknown',
+                problem: callState.issue || 'Unknown',
+                zip: callState.zip || '',
+                phone: callState.phone || '',
+                address: callState.address || '',
+                email: callState.email || '',
+                serviceDate: callState.selectedSlot ? callState.selectedSlot.serviceDate : '',
+                serviceDay: callState.selectedDay || '',
+                serviceWindow: callState.selectedSlot ? callState.selectedSlot.serviceWindow : '',
+                time: getEasternTimestamp()
+              };
+              saveJob(job);
+
+              // Send confirmation email
+              try {
+                await sendAppointmentConfirmationEmail({
+                  to: callState.email,
+                  name: 'Customer',
+                  machine: callState.machine,
+                  issue: callState.issue,
+                  serviceDate: job.serviceDate,
+                  serviceWindow: job.serviceWindow,
+                  address: callState.address
+                });
+              } catch (err) {
+                console.error('Email send failed:', err);
+              }
+
+              const dayLine = callState.selectedSlot
+                ? `on ${callState.selectedSlot.readableDate} between ${callState.selectedSlot.serviceWindow}`
+                : `on ${callState.selectedDay || 'the selected day'}`;
+
+              ws.send(JSON.stringify({ type: 'text', token: `You are all set. Your appointment is confirmed ${dayLine}. We will send a confirmation to ${formatEmailForSpeech(callState.email)}. Thank you and have a great day.`, last: true }));
+              callState.booked = true;
+            } else {
+              callState.email = null;
+              ws.send(JSON.stringify({ type: 'text', token: 'Okay. What is the correct email address?', last: true }));
+            }
+            break;
+          }
+
+          if (callState.booked) {
+            ws.send(JSON.stringify({ type: 'text', token: 'Your appointment is already confirmed. Have a great day.', last: true }));
             break;
           }
 
