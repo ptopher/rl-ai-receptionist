@@ -3005,6 +3005,11 @@ wss.on('connection', (ws, req) => {
           const userText = data.voicePrompt || '';
           const cleaned = cleanText(userText);
           console.log('Caller said:', userText);
+
+          let normalizedText = cleaned;
+          if (cleaned === '1') normalizedText = 'monday';
+          if (cleaned === '2') normalizedText = 'wednesday';
+          if (cleaned === '3') normalizedText = 'friday';
           let reply = '';
 
           if (callState.awaitingZipConfirmation) {
@@ -3107,11 +3112,11 @@ wss.on('connection', (ws, req) => {
           // 8. Scheduling option selection
           if (callState.inScheduling && callState.offeredSlots.length) {
             const selectedOption =
-              cleaned.includes('option 1') || cleaned === '1' || cleaned.includes('one')
+              normalizedText.includes('option 1') || normalizedText === '1' || normalizedText.includes('one') || normalizedText.includes('monday')
                 ? 1
-                : cleaned.includes('option 2') || cleaned === '2' || cleaned.includes('two')
+                : normalizedText.includes('option 2') || normalizedText === '2' || normalizedText.includes('two') || normalizedText.includes('wednesday')
                 ? 2
-                : cleaned.includes('option 3') || cleaned === '3' || cleaned.includes('three')
+                : normalizedText.includes('option 3') || normalizedText === '3' || normalizedText.includes('three') || normalizedText.includes('friday')
                 ? 3
                 : 0;
             if (!selectedOption) {
