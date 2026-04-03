@@ -3182,7 +3182,7 @@ wss.on('connection', (ws, req) => {
           if (callState.phoneConfirmed && !callState.address) {
             const rawAddress = String(userText || '').trim();
             if (rawAddress.length >= 5) {
-              callState.address = normalizeAddressText(rawAddress);
+              callState.address = normalizeAddressText(applyLocalCorrections(rawAddress));
               ws.send(JSON.stringify({ type: 'text', token: `I have your address as ${callState.address}. Is that correct?`, last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: 'What is the service address?', last: true }));
@@ -3204,10 +3204,11 @@ wss.on('connection', (ws, req) => {
 
           // ===== STEP 9: COLLECT EMAIL =====
           if (callState.addressConfirmed && !callState.email) {
-            const rawEmail = extractEmailFromSpeech(req);
-            if (rawEmail && rawEmail.includes('@')) {
-              callState.email = rawEmail;
-              const spoken = formatEmailForSpeech(rawEmail);
+            const rawEmail = normalizeEmailSpeech(userText);
+            const cleanedEmail = sanitizeLooseEmail(rawEmail);
+            if (cleanedEmail && cleanedEmail.includes('@')) {
+              callState.email = cleanedEmail;
+              const spoken = formatEmailForSpeech(cleanedEmail);
               ws.send(JSON.stringify({ type: 'text', token: `I have your email as ${spoken}. Is that correct?`, last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: 'What email address should we send the confirmation to?', last: true }));
