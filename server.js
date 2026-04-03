@@ -36,7 +36,7 @@ CALL FLOW:
 
 5. IF IN AREA:
 Say:
-"Our next available days are Monday, Wednesday, or Friday. Which works best for you?"
+"I have a 10:00 to 10:30 opening Monday through Thursday. On Friday and Saturday, I have morning or afternoon availability. What works best for you?"
 
 6. WHEN CUSTOMER PICKS A DAY:
 DO NOT go silent
