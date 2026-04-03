@@ -1448,6 +1448,7 @@ function buildVoiceTwiml(req) {
     <ConversationRelay
       url="${xmlEscape(wsUrl)}"
       welcomeGreeting="Thanks for calling RL Small Engines. What can I help you with today?"
+      dtmfDetection="false"
     />
   </Connect>
 </Response>
@@ -3222,7 +3223,8 @@ wss.on('connection', (ws, req) => {
             const rawAddress = String(userText || '').trim();
             if (rawAddress.length >= 5) {
               callState.address = normalizeAddressText(applyLocalCorrections(rejoinSpacedDigits(rawAddress)));
-              ws.send(JSON.stringify({ type: 'text', token: `I have your address as ${callState.address}. Is that correct?`, last: true }));
+              const addrForSpeech = callState.address.replace(/\b(\d{4,})\b/g, (n) => n.slice(0,-2) + ' ' + n.slice(-2));
+              ws.send(JSON.stringify({ type: 'text', token: `I have your address as ${addrForSpeech}. Is that correct?`, last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: 'What is the service address?', last: true }));
             }
@@ -3282,7 +3284,7 @@ wss.on('connection', (ws, req) => {
               try {
                 await sendAppointmentConfirmationEmail({
                   to: callState.email,
-                  name: callState.callerName || 'Customer',
+                  name: callState.callerName || 'Phone Caller',
                   machine: callState.machine,
                   issue: callState.issue,
                   serviceDate: job.serviceDate || callState.selectedDay || '',
