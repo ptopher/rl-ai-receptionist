@@ -782,7 +782,11 @@ function getDayNameInEastern(date) {
 
 function getReadableDate(dateKey) {
   if (!dateKey) return '';
+  // If it's a day name rather than a date key, return it directly
+  const dayNames = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  if (dayNames.includes(dateKey)) return dateKey;
   const dt = new Date(`${dateKey}T12:00:00`);
+  if (isNaN(dt.getTime())) return dateKey;
   return dt.toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'long',
@@ -880,6 +884,11 @@ function detectYesNoText(text) {
     return 'no';
   }
   return '';
+}
+
+function rejoinSpacedDigits(text) {
+  // Join sequences of single digits separated by spaces e.g. "1 7 4 8" -> "1748"
+  return String(text || '').replace(/\b(\d\s){2,}\d\b/g, (match) => match.replace(/\s/g, ''));
 }
 
 
@@ -3199,7 +3208,7 @@ wss.on('connection', (ws, req) => {
           if (callState.phoneConfirmed && !callState.address) {
             const rawAddress = String(userText || '').trim();
             if (rawAddress.length >= 5) {
-              callState.address = normalizeAddressText(applyLocalCorrections(rawAddress));
+              callState.address = normalizeAddressText(applyLocalCorrections(rejoinSpacedDigits(rawAddress)));
               ws.send(JSON.stringify({ type: 'text', token: `I have your address as ${callState.address}. Is that correct?`, last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: 'What is the service address?', last: true }));
@@ -3249,7 +3258,7 @@ wss.on('connection', (ws, req) => {
                 phone: callState.phone || '',
                 address: callState.address || '',
                 email: callState.email || '',
-                serviceDate: '',
+                serviceDate: callState.selectedDay || '',
                 serviceDay: callState.selectedDay || '',
                 serviceWindow: callState.timeWindow || (callState.selectedDay === 'Monday' || callState.selectedDay === 'Tuesday' || callState.selectedDay === 'Wednesday' || callState.selectedDay === 'Thursday' ? '10:00 to 10:30' : ''),
                 time: getEasternTimestamp()
