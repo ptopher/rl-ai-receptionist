@@ -1644,6 +1644,7 @@ app.post('/getZipForAppointment', wrapRoute(async (req, res) => {
 
 // ===== STEP 4B: APPOINTMENT OPTION SELECTION =====
 app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
+  console.log("🔥 HIT selectAppointmentOption", req.body);
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
