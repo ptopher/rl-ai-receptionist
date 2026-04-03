@@ -3000,7 +3000,8 @@ wss.on('connection', (ws, req) => {
     addressConfirmed: false,
     email: null,
     emailConfirmed: false,
-    booked: false
+    booked: false,
+    timeWindow: ''
   };
   console.log('ConversationRelay connected');
   ws.on('message', async (message) => {
@@ -3045,6 +3046,7 @@ wss.on('connection', (ws, req) => {
             if (callState.selectedDay === "Friday" || callState.selectedDay === "Saturday") {
               ws.send(JSON.stringify({ type: "text", token: "Do you prefer morning or afternoon?", last: true }));
             } else {
+              callState.timeWindow = '10:00 to 10:30';
               ws.send(JSON.stringify({ type: "text", token: "That will be 10 to 10:30. What phone number should we use?", last: true }));
             }
             break;
@@ -3152,6 +3154,21 @@ wss.on('connection', (ws, req) => {
 
 
 
+          // ===== STEP 4B: CAPTURE MORNING/AFTERNOON FOR FRI/SAT =====
+          if (callState.dayConfirmed && !callState.timeWindow &&
+              (callState.selectedDay === 'Friday' || callState.selectedDay === 'Saturday')) {
+            if (text.includes('morning')) {
+              callState.timeWindow = '10:00 to 12:00';
+              ws.send(JSON.stringify({ type: 'text', token: 'Got it, morning works. What phone number should we use?', last: true }));
+            } else if (text.includes('afternoon')) {
+              callState.timeWindow = '1:00 to 4:00';
+              ws.send(JSON.stringify({ type: 'text', token: 'Got it, afternoon works. What phone number should we use?', last: true }));
+            } else {
+              ws.send(JSON.stringify({ type: 'text', token: 'Do you prefer morning or afternoon?', last: true }));
+            }
+            break;
+          }
+
           // ===== STEP 5: COLLECT PHONE AFTER DAY CONFIRMED =====
           if (callState.dayConfirmed && !callState.phone) {
             const possiblePhone = normalizeSpokenDigits(userText);
@@ -3232,9 +3249,9 @@ wss.on('connection', (ws, req) => {
                 phone: callState.phone || '',
                 address: callState.address || '',
                 email: callState.email || '',
-                serviceDate: callState.selectedSlot ? callState.selectedSlot.serviceDate : '',
+                serviceDate: '',
                 serviceDay: callState.selectedDay || '',
-                serviceWindow: callState.selectedSlot ? callState.selectedSlot.serviceWindow : '',
+                serviceWindow: callState.timeWindow || (callState.selectedDay === 'Monday' || callState.selectedDay === 'Tuesday' || callState.selectedDay === 'Wednesday' || callState.selectedDay === 'Thursday' ? '10:00 to 10:30' : ''),
                 time: getEasternTimestamp()
               };
               saveJob(job);
@@ -3246,8 +3263,8 @@ wss.on('connection', (ws, req) => {
                   name: 'Customer',
                   machine: callState.machine,
                   issue: callState.issue,
-                  serviceDate: job.serviceDate,
-                  serviceWindow: job.serviceWindow,
+                  serviceDate: job.serviceDate || callState.selectedDay || '',
+                  serviceWindow: job.serviceWindow || callState.timeWindow || (callState.selectedDay === 'Monday' || callState.selectedDay === 'Tuesday' || callState.selectedDay === 'Wednesday' || callState.selectedDay === 'Thursday' ? '10:00 to 10:30' : ''),
                   address: callState.address
                 });
               } catch (err) {
