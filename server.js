@@ -2993,7 +2993,11 @@ wss.on('connection', (ws, req) => {
     offeredSlots: [],
     selectedSlot: null,
     selectedDay: null,
-    dayConfirmed: false
+    dayConfirmed: false,
+    phone: null,
+    phoneConfirmed: false,
+    address: null,
+    addressConfirmed: false
   };
   console.log('ConversationRelay connected');
   ws.on('message', async (message) => {
@@ -3143,31 +3147,55 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
-          // 8. Scheduling option selection
-          if (callState.inScheduling && callState.offeredSlots.length) {
-            const selectedOption =
-              normalizedText.includes('option 1') || normalizedText === '1' || normalizedText.includes('one') || normalizedText.includes('monday')
-                ? 1
-                : normalizedText.includes('option 2') || normalizedText === '2' || normalizedText.includes('two') || normalizedText.includes('wednesday')
-                ? 2
-                : normalizedText.includes('option 3') || normalizedText === '3' || normalizedText.includes('three') || normalizedText.includes('friday')
-                ? 3
-                : 0;
-            if (!selectedOption) {
-              reply = 'Please say or press option 1, 2, or 3.';
-              ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+
+
+          // ===== STEP 5: COLLECT PHONE AFTER DAY CONFIRMED =====
+          if (callState.dayConfirmed && !callState.phone) {
+            const possiblePhone = normalizeSpokenDigits(userText);
+            const normalized = normalizeTenDigitPhone(possiblePhone);
+            if (normalized.length === 10) {
+              callState.phone = normalized;
+              const spoken = normalized.split('').join(', ');
+              ws.send(JSON.stringify({ type: 'text', token: `I got ${spoken}. Is that correct?`, last: true }));
               break;
             }
-            const chosenSlot = callState.offeredSlots[selectedOption - 1];
-            if (!chosenSlot) {
-              reply = 'That option is not available. Please say or press option 1, 2, or 3.';
-              ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
-              break;
+            ws.send(JSON.stringify({ type: 'text', token: 'What phone number should we use?', last: true }));
+            break;
+          }
+
+          // ===== STEP 6: CONFIRM PHONE =====
+          if (callState.phone && !callState.phoneConfirmed) {
+            if (text.includes('yes') || text.includes('correct')) {
+              callState.phoneConfirmed = true;
+              ws.send(JSON.stringify({ type: 'text', token: 'Got it. What is the service address?', last: true }));
+            } else {
+              callState.phone = null;
+              ws.send(JSON.stringify({ type: 'text', token: 'Okay. What is the correct phone number?', last: true }));
             }
-            callState.selectedSlot = chosenSlot;
-            callState.inScheduling = false;
-            reply = `Great. You selected ${chosenSlot.readableDate}, between ${chosenSlot.serviceWindow}.`;
-            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+            break;
+          }
+
+          // ===== STEP 7: COLLECT ADDRESS =====
+          if (callState.phoneConfirmed && !callState.address) {
+            const rawAddress = String(userText || '').trim();
+            if (rawAddress.length >= 5) {
+              callState.address = normalizeAddressText(rawAddress);
+              ws.send(JSON.stringify({ type: 'text', token: `I have your address as ${callState.address}. Is that correct?`, last: true }));
+            } else {
+              ws.send(JSON.stringify({ type: 'text', token: 'What is the service address?', last: true }));
+            }
+            break;
+          }
+
+          // ===== STEP 8: CONFIRM ADDRESS =====
+          if (callState.address && !callState.addressConfirmed) {
+            if (text.includes('yes') || text.includes('correct')) {
+              callState.addressConfirmed = true;
+              ws.send(JSON.stringify({ type: 'text', token: 'Great. What email address should we send the confirmation to?', last: true }));
+            } else {
+              callState.address = null;
+              ws.send(JSON.stringify({ type: 'text', token: 'Okay. What is the correct service address?', last: true }));
+            }
             break;
           }
 
