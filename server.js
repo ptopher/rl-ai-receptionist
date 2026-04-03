@@ -3094,11 +3094,7 @@ wss.on('connection', (ws, req) => {
               if (!slots.length) {
                 reply = 'Sorry, there are no available appointments right now.';
               } else {
-                let slotSpeech = 'Here are the next available appointments. ';
-                slots.forEach((slot, index) => {
-                  slotSpeech += `Option ${index + 1}, ${slot.readableDate}, between ${slot.serviceWindow}. `;
-                });
-                slotSpeech += 'Please say or press option 1, 2, or 3.';
+                const slotSpeech = "I have a 10 to 10:30 opening Monday through Thursday. Friday and Saturday I have morning or afternoon availability. What works best for you?";
                 reply = slotSpeech;
               }
             } else {
