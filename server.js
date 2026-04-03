@@ -3050,9 +3050,9 @@ wss.on('connection', (ws, req) => {
           console.log('Caller said:', userText);
 
           let normalizedText = cleaned;
-          if (cleaned === '1') normalizedText = 'monday';
-          if (cleaned === '2') normalizedText = 'wednesday';
-          if (cleaned === '3') normalizedText = 'friday';
+          if (cleaned === '1') normalizedText = 'option 1';
+          if (cleaned === '2') normalizedText = 'option 2';
+          if (cleaned === '3') normalizedText = 'option 3';
           let reply = '';
 
           const text = data.voicePrompt?.toLowerCase() || "";
@@ -3066,23 +3066,49 @@ wss.on('connection', (ws, req) => {
           else if (text.includes("friday")) detectedDay = "Friday";
           else if (text.includes("saturday")) detectedDay = "Saturday";
 
-          // ===== STEP 2: IF USER SAID A DAY =====
-          if (callState.inScheduling && detectedDay && !callState.dayConfirmed) {
-            callState.selectedDay = detectedDay;
-            ws.send(JSON.stringify({ type: "text", token: `Got it, ${detectedDay}. Does that sound right?`, last: true }));
-            break;
+          // ===== STEP 2: IF USER SAID A DAY OR OPTION NUMBER =====
+          if (callState.inScheduling && !callState.dayConfirmed) {
+            // Try to match by option number first
+            let matchedSlot = null;
+            if (normalizedText.includes('option 1') || normalizedText === '1' || normalizedText.includes('one')) matchedSlot = callState.offeredSlots[0];
+            else if (normalizedText.includes('option 2') || normalizedText === '2' || normalizedText.includes('two')) matchedSlot = callState.offeredSlots[1];
+            else if (normalizedText.includes('option 3') || normalizedText === '3' || normalizedText.includes('three')) matchedSlot = callState.offeredSlots[2];
+            // Then try day name match against offered slots
+            if (!matchedSlot && detectedDay) {
+              matchedSlot = callState.offeredSlots.find(s => s.serviceDay === detectedDay);
+            }
+            if (matchedSlot) {
+              callState.selectedDay = matchedSlot.serviceDay;
+              callState.serviceDate = matchedSlot.serviceDate;
+              callState.timeWindow = matchedSlot.serviceWindow;
+              const readableSlot = matchedSlot.readableDate + ' between ' + matchedSlot.serviceWindow;
+              ws.send(JSON.stringify({ type: "text", token: `Got it, ${readableSlot}. Does that sound right?`, last: true }));
+              break;
+            }
+            if (detectedDay) {
+              callState.selectedDay = detectedDay;
+              ws.send(JSON.stringify({ type: "text", token: `Got it, ${detectedDay}. Does that sound right?`, last: true }));
+              break;
+            }
           }
 
           // ===== STEP 3: HANDLE YES =====
           if (callState.selectedDay && !callState.dayConfirmed && text.includes("yes")) {
             callState.dayConfirmed = true;
-            if (callState.selectedDay === "Friday" || callState.selectedDay === "Saturday") {
-              ws.send(JSON.stringify({ type: "text", token: "Do you prefer morning or afternoon?", last: true }));
-            } else {
+            // If slot already set timeWindow (from offeredSlots match), use it
+            if (!callState.timeWindow) {
               callState.timeWindow = '10:00 to 10:30';
-              callState.serviceDate = getNextDateForDay(callState.selectedDay);
-              ws.send(JSON.stringify({ type: "text", token: "That will be 10 to 10:30. Can I get your first and last name?", last: true }));
             }
+            if (!callState.serviceDate) {
+              callState.serviceDate = getNextDateForDay(callState.selectedDay);
+            }
+            if (callState.selectedDay === "Friday" || callState.selectedDay === "Saturday") {
+              if (!callState.timeWindow || callState.timeWindow === '10:00 to 10:30') {
+                ws.send(JSON.stringify({ type: "text", token: "Do you prefer morning or afternoon?", last: true }));
+                break;
+              }
+            }
+            ws.send(JSON.stringify({ type: "text", token: `Can I get your first and last name?`, last: true }));
             break;
           }
 
@@ -3173,10 +3199,27 @@ wss.on('connection', (ws, req) => {
               const slots = await findAvailableSlots(callState.zip, 1, 3);
               callState.offeredSlots = slots;
               if (!slots.length) {
-                reply = 'Sorry, there are no available appointments right now.';
+                reply = 'Sorry, there are no available appointments right now. Please call back soon.';
               } else {
-                const slotSpeech = "I have a 10 to 10:30 opening Monday through Thursday. Friday and Saturday I have morning or afternoon availability. What works best for you?";
+                // Build speech from real available slots
+                let slotSpeech = 'Here are our next available appointments. ';
+                slots.forEach((slot, i) => {
+                  let window;
+                  if (slot.serviceWindow === '10:00 to 10:30') {
+                    window = 'between ten and ten thirty in the morning';
+                  } else if (slot.serviceWindow === '10:00 to 12:00') {
+                    window = 'morning, between ten and noon';
+                  } else if (slot.serviceWindow === '1:00 to 4:00') {
+                    window = 'afternoon, between one and four';
+                  } else {
+                    window = slot.serviceWindow;
+                  }
+                  slotSpeech += `Option ${i + 1}, ${slot.readableDate}, ${window}. `;
+                });
+                slotSpeech += 'Which option works best for you? You can say option one, two, or three.';
                 reply = slotSpeech;
+                // Store offered slots so day detection uses real dates
+                callState.offeredSlots = slots;
               }
             } else {
               callState.askedForSchedule = false;
@@ -3223,8 +3266,8 @@ wss.on('connection', (ws, req) => {
             const normalized = normalizeTenDigitPhone(possiblePhone);
             if (normalized.length === 10) {
               callState.phone = normalized;
-              const spoken = normalized.slice(0,3) + ', ' + normalized.slice(3,6) + ', ' + normalized.slice(6);
-              ws.send(JSON.stringify({ type: 'text', token: `I got ${spoken}. Is that correct?`, last: true }));
+              const spokenNum = normalized.slice(0,3).split('').join(' ') + ', ' + normalized.slice(3,6).split('').join(' ') + ', ' + normalized.slice(6).split('').join(' ');
+              ws.send(JSON.stringify({ type: 'text', token: `I have ${spokenNum}. Is that correct?`, last: true }));
               break;
             }
             ws.send(JSON.stringify({ type: 'text', token: 'What phone number should we use?', last: true }));
