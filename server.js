@@ -3056,6 +3056,7 @@ wss.on('connection', (ws, req) => {
           let reply = '';
 
           const text = data.voicePrompt?.toLowerCase() || "";
+          console.log('STATE:', JSON.stringify({ machine: callState.machine, issue: !!callState.issue, zip: callState.zip, zipConfirmed: callState.zipConfirmed, askedForSchedule: callState.askedForSchedule, inScheduling: callState.inScheduling, selectedDay: callState.selectedDay, dayConfirmed: callState.dayConfirmed, callerName: !!callState.callerName }));
 
           // ===== STEP 1: DETECT DAY =====
           let detectedDay = null;
