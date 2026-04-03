@@ -3028,7 +3028,7 @@ wss.on('connection', (ws, req) => {
           // ===== STEP 2: IF USER SAID A DAY =====
           if (callState.inScheduling && detectedDay && !callState.dayConfirmed) {
             callState.selectedDay = detectedDay;
-            ws.send(JSON.stringify({ type: "response", text: `Got it, ${detectedDay}. Does that sound right?` }));
+            ws.send(JSON.stringify({ type: "text", token: `Got it, ${detectedDay}. Does that sound right?`, last: true }));
             break;
           }
 
@@ -3036,9 +3036,9 @@ wss.on('connection', (ws, req) => {
           if (callState.selectedDay && !callState.dayConfirmed && text.includes("yes")) {
             callState.dayConfirmed = true;
             if (callState.selectedDay === "Friday" || callState.selectedDay === "Saturday") {
-              ws.send(JSON.stringify({ type: "response", text: "Do you prefer morning or afternoon?" }));
+              ws.send(JSON.stringify({ type: "text", token: "Do you prefer morning or afternoon?", last: true }));
             } else {
-              ws.send(JSON.stringify({ type: "response", text: "That will be 10 to 10:30. What phone number should we use?" }));
+              ws.send(JSON.stringify({ type: "text", token: "That will be 10 to 10:30. What phone number should we use?", last: true }));
             }
             break;
           }
@@ -3046,7 +3046,7 @@ wss.on('connection', (ws, req) => {
           // ===== STEP 4: HANDLE NO =====
           if (callState.selectedDay && !callState.dayConfirmed && text.includes("no")) {
             callState.selectedDay = null;
-            ws.send(JSON.stringify({ type: "response", text: "Okay, no problem. Which day works better for you?" }));
+            ws.send(JSON.stringify({ type: "text", token: "Okay, no problem. Which day works better for you?", last: true }));
             break;
           }
 
