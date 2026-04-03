@@ -13,59 +13,27 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 
 const SYSTEM_PROMPT = `
 You are Emma, the AI receptionist for RL Small Engines.
-
-STYLE:
-- Speak naturally, not robotic
-- Short, confident responses
-- No repeating questions
-- Do not say "tell me more about that" repeatedly
-- Move the conversation forward
-
-BUSINESS RULES:
-- This is a mobile repair service (we go to the customer)
-- No drop-offs or pickups
-- Pricing depends on the issue (do NOT give fixed prices)
-- Only service supported machines and brands
-
-CALL FLOW:
-
-1. Ask what the problem is
-2. Understand the issue (even if customer uses wrong terms)
-3. Ask for ZIP code BEFORE scheduling
-4. If outside service area → politely decline
-
-5. IF IN AREA:
-Say:
-"I have a 10:00 to 10:30 opening Monday through Thursday. On Friday and Saturday, I have morning or afternoon availability. What works best for you?"
-
-6. WHEN CUSTOMER PICKS A DAY:
-DO NOT go silent
-DO NOT repeat the same question
-
-Respond like this:
-"Got it, [DAY] works. What time of day is better, morning or afternoon?"
-
-7. Then continue:
-- collect phone number
-- collect email
-- confirm details
-
-8. CALLBACK RULES:
-- Do NOT offer callbacks unless customer insists
-- If they insist, allow it
-
-9. RAMBLING:
-- Politely guide them back:
-"Got it — let me ask you a couple quick questions so I can get you scheduled."
-
-10. TECH QUESTIONS:
-- Give simple helpful guidance if possible
-- Do not go deep into repairs
-
-IMPORTANT:
-- Always move forward
-- Never stall
-- Never repeat the same question unless necessary
+Speak naturally, briefly, and professionally. Sound like a real person.
+Keep replies short - usually one sentence.
+Business rules:
+- Mobile service only. No drop-offs.
+- Do not quote exact prices.
+- Get machine and issue clearly.
+- Get ZIP code before scheduling.
+- If outside service area, politely decline.
+- Never promise callbacks unless customer insists.
+Conversation order:
+1. Identify machine and issue from what caller said.
+2. If machine missing, ask for machine.
+3. If issue missing, ask for issue.
+4. If both known, ask for ZIP code.
+5. After ZIP confirmed, ask if they want to schedule.
+6. If yes, offer real available appointment slots.
+7. Collect name, phone, address, email to complete booking.
+Examples:
+- "My lawnmower won't start" -> ask for ZIP.
+- "I need my generator repaired" -> ask what it's doing.
+- "I need repair" -> ask what type of machine.
 `;
 
 async function getAIResponse(userInput) {
@@ -77,31 +45,23 @@ async function getAIResponse(userInput) {
     },
     body: JSON.stringify({
       model: 'gpt-4.1-mini',
-      input: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userInput }
-      ]
+      input: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: userInput }]
     })
   });
   const data = await response.json();
   if (!response.ok) {
-    console.error('OpenAI error response:', JSON.stringify(data, null, 2));
+    console.error('OpenAI error:', JSON.stringify(data));
     throw new Error(data.error?.message || 'OpenAI request failed');
   }
-  if (typeof data.output_text === 'string' && data.output_text.trim()) {
-    return data.output_text.trim();
-  }
+  if (typeof data.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
   if (Array.isArray(data.output)) {
     for (const item of data.output) {
       if (!item || !Array.isArray(item.content)) continue;
       for (const part of item.content) {
-        if (part?.type === 'output_text' && typeof part.text === 'string' && part.text.trim()) {
-          return part.text.trim();
-        }
+        if (part?.type === 'output_text' && typeof part.text === 'string' && part.text.trim()) return part.text.trim();
       }
     }
   }
-  console.error('OpenAI response had no usable text:', JSON.stringify(data, null, 2));
   return 'I got that. Tell me the main issue you are having with the machine.';
 }
 
@@ -212,6 +172,10 @@ const countyZips = {
 // ===== LOCAL CORRECTION LAYER =====
 const exactPhraseCorrections = [
   ['bevern', 'severn'],
+  ['saverne', 'severn'],
+  ['savern', 'severn'],
+  ['saverne maryland', 'severn maryland'],
+  ['savern maryland', 'severn maryland'],
   ['seven maryland', 'severn maryland'],
   ['7 maryland', 'severn maryland'],
   ['severn marylin', 'severn maryland'],
@@ -245,6 +209,8 @@ const exactPhraseCorrections = [
 
 const wordCorrections = {
   bevern: 'severn',
+  saverne: 'severn',
+  savern: 'severn',
   sevenn: 'severn',
   severnn: 'severn',
   stubborn: 'severn',
@@ -702,6 +668,7 @@ function formatEmailForSpeech(email) {
     .replace(/_/g, ' underscore ')
     .replace(/-/g, ' dash ')
     .replace(/\+/g, ' plus ')
+    .replace(/\d+/g, (n) => n.split('').join(' '))
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -782,11 +749,7 @@ function getDayNameInEastern(date) {
 
 function getReadableDate(dateKey) {
   if (!dateKey) return '';
-  // If it's a day name rather than a date key, return it directly
-  const dayNames = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-  if (dayNames.includes(dateKey)) return dateKey;
   const dt = new Date(`${dateKey}T12:00:00`);
-  if (isNaN(dt.getTime())) return dateKey;
   return dt.toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'long',
@@ -874,44 +837,6 @@ function detectOptionSelection(req) {
 
   return null;
 }
-
-function detectYesNoText(text) {
-  const cleaned = cleanText(text);
-  if (cleaned.includes('yes') || cleaned.includes('correct') || cleaned.includes('that is correct') || cleaned.includes('sounds correct')) {
-    return 'yes';
-  }
-  if (cleaned.includes('no') || cleaned.includes('wrong') || cleaned.includes('not correct') || cleaned.includes('change it')) {
-    return 'no';
-  }
-  return '';
-}
-
-function rejoinSpacedDigits(text) {
-  // Join sequences of single digits separated by spaces e.g. "1 7 4 8" -> "1748"
-  return String(text || '').replace(/\b(\d\s){2,}\d\b/g, (match) => match.replace(/\s/g, ''));
-}
-
-function getNextDateForDay(dayName) {
-  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const target = days.indexOf(dayName);
-  if (target === -1) return null;
-  const now = getEasternNow();
-  const current = now.getDay();
-  let diff = target - current;
-  if (diff <= 0) diff += 7;
-  const next = new Date(now);
-  next.setDate(now.getDate() + diff);
-  return formatEasternDateKey(next);
-}
-
-function formatStreetNumberForSpeech(address) {
-  return String(address || '').replace(/^(\d+)/, (num) => {
-    if (num.length === 4) return num.slice(0, 2) + ' ' + num.slice(2);
-    if (num.length === 3) return num.slice(0, 1) + ' ' + num.slice(1);
-    return num;
-  });
-}
-
 
 function detectCorrectionField(text) {
   const cleaned = cleanText(text);
@@ -1462,14 +1387,12 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
 // ===== CALL FLOW START =====
 function buildVoiceTwiml(req) {
   const wsUrl = `wss://${req.get('host')}/conversation-relay`;
-
   return `
 <Response>
   <Connect>
     <ConversationRelay
       url="${xmlEscape(wsUrl)}"
       welcomeGreeting="Thanks for calling RL Small Engines. What can I help you with today?"
-      dtmfDetection="false"
     />
   </Connect>
 </Response>
@@ -1503,6 +1426,11 @@ app.get('/test-email', wrapRoute(async (req, res) => {
 
 app.get('/test-ai', wrapRoute(async (req, res) => {
   const reply = await getAIResponse('Customer says: My riding mower will not start and I am in zip code 21144. What would you say next?');
+  res.status(200).type('text/plain').send(reply);
+}));
+
+app.get('/test-ai', wrapRoute(async (req, res) => {
+  const reply = await getAIResponse('Customer says: My riding mower will not start. What would you say next?');
   res.status(200).type('text/plain').send(reply);
 }));
 
@@ -1675,7 +1603,6 @@ app.post('/getZipForAppointment', wrapRoute(async (req, res) => {
 
 // ===== STEP 4B: APPOINTMENT OPTION SELECTION =====
 app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
-  console.log("🔥 HIT selectAppointmentOption", req.body);
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -3006,37 +2933,53 @@ process.on('uncaughtException', (error) => {
 });
 
 const PORT = process.env.PORT || 3000;
-// Create HTTP server
-const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-// Attach WebSocket server to same HTTP server
+const server = app.listen(PORT, () => { console.log(`Server running on port ${PORT}`); });
+
 const wss = new WebSocket.Server({ server });
+
+function getNextDateForDay(dayName) {
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const target = days.indexOf(dayName);
+  if (target === -1) return null;
+  const now = getEasternNow();
+  const current = now.getDay();
+  let diff = target - current;
+  if (diff <= 0) diff += 7;
+  const next = new Date(now);
+  next.setDate(now.getDate() + diff);
+  return formatEasternDateKey(next);
+}
+
+function rejoinSpacedDigits(text) {
+  return String(text || '').replace(/\b(\d\s){2,}\d\b/g, (match) => match.replace(/\s/g, ''));
+}
+
+function formatStreetNumberForSpeech(address) {
+  return String(address || '').replace(/^(\d+)/, (num) => {
+    if (num.length === 4) return num.slice(0,2) + ' ' + num.slice(2);
+    if (num.length === 3) return num.slice(0,1) + ' ' + num.slice(1);
+    return num;
+  });
+}
+
+function detectYesNoText(text) {
+  const c = cleanText(text);
+  if (c.includes('yes') || c.includes('correct') || c.includes('that is correct') || c.includes('sounds correct')) return 'yes';
+  if (c.includes('no') || c.includes('wrong') || c.includes('not correct') || c.includes('change it')) return 'no';
+  return '';
+}
+
 wss.on('connection', (ws, req) => {
-  const callState = {
-    machine: '',
-    issue: '',
-    zip: '',
-    awaitingZipConfirmation: false,
-    zipConfirmed: false,
-    askedForSchedule: false,
-    inScheduling: false,
-    offeredSlots: [],
-    selectedSlot: null,
-    selectedDay: null,
-    dayConfirmed: false,
-    phone: null,
-    phoneConfirmed: false,
-    address: null,
-    addressConfirmed: false,
-    email: null,
-    emailConfirmed: false,
-    booked: false,
-    timeWindow: '',
-    callerName: '',
-    serviceDate: ''
-  };
   console.log('ConversationRelay connected');
+  const callState = {
+    machine: '', issue: '', zip: '', awaitingZipConfirmation: false,
+    zipConfirmed: false, askedForSchedule: false, inScheduling: false,
+    offeredSlots: [], selectedSlot: null, selectedDay: null, dayConfirmed: false,
+    timeWindow: '', serviceDate: '', callerName: '', phone: null,
+    phoneConfirmed: false, address: null, addressConfirmed: false,
+    email: null, emailConfirmed: false, booked: false
+  };
+
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message.toString());
@@ -3047,92 +2990,24 @@ wss.on('connection', (ws, req) => {
         case 'prompt': {
           const userText = data.voicePrompt || '';
           const cleaned = cleanText(userText);
+          const text = userText.toLowerCase();
           console.log('Caller said:', userText);
-
-          let normalizedText = cleaned;
-          if (cleaned === '1') normalizedText = 'option 1';
-          if (cleaned === '2') normalizedText = 'option 2';
-          if (cleaned === '3') normalizedText = 'option 3';
           let reply = '';
 
-          const text = data.voicePrompt?.toLowerCase() || "";
-          console.log('STATE:', JSON.stringify({ machine: callState.machine, issue: !!callState.issue, zip: callState.zip, zipConfirmed: callState.zipConfirmed, askedForSchedule: callState.askedForSchedule, inScheduling: callState.inScheduling, selectedDay: callState.selectedDay, dayConfirmed: callState.dayConfirmed, callerName: !!callState.callerName }));
-
-          // ===== STEP 1: DETECT DAY =====
-          let detectedDay = null;
-          if (text.includes("monday")) detectedDay = "Monday";
-          else if (text.includes("tuesday")) detectedDay = "Tuesday";
-          else if (text.includes("wednesday")) detectedDay = "Wednesday";
-          else if (text.includes("thursday")) detectedDay = "Thursday";
-          else if (text.includes("friday")) detectedDay = "Friday";
-          else if (text.includes("saturday")) detectedDay = "Saturday";
-
-          // ===== STEP 2: IF USER SAID A DAY OR OPTION NUMBER =====
-          if (callState.inScheduling && !callState.dayConfirmed) {
-            // Try to match by option number first
-            let matchedSlot = null;
-            if (normalizedText.includes('option 1') || normalizedText === '1' || normalizedText.includes('one')) matchedSlot = callState.offeredSlots[0];
-            else if (normalizedText.includes('option 2') || normalizedText === '2' || normalizedText.includes('two')) matchedSlot = callState.offeredSlots[1];
-            else if (normalizedText.includes('option 3') || normalizedText === '3' || normalizedText.includes('three')) matchedSlot = callState.offeredSlots[2];
-            // Then try day name match against offered slots
-            if (!matchedSlot && detectedDay) {
-              matchedSlot = callState.offeredSlots.find(s => s.serviceDay === detectedDay);
-            }
-            if (matchedSlot) {
-              callState.selectedDay = matchedSlot.serviceDay;
-              callState.serviceDate = matchedSlot.serviceDate;
-              callState.timeWindow = matchedSlot.serviceWindow;
-              const readableSlot = matchedSlot.readableDate + ' between ' + matchedSlot.serviceWindow;
-              ws.send(JSON.stringify({ type: "text", token: `Got it, ${readableSlot}. Does that sound right?`, last: true }));
-              break;
-            }
-            if (detectedDay) {
-              callState.selectedDay = detectedDay;
-              ws.send(JSON.stringify({ type: "text", token: `Got it, ${detectedDay}. Does that sound right?`, last: true }));
-              break;
-            }
-          }
-
-          // ===== STEP 3: HANDLE YES =====
-          if (callState.selectedDay && !callState.dayConfirmed && text.includes("yes")) {
-            callState.dayConfirmed = true;
-            // If slot already set timeWindow (from offeredSlots match), use it
-            if (!callState.timeWindow) {
-              callState.timeWindow = '10:00 to 10:30';
-            }
-            if (!callState.serviceDate) {
-              callState.serviceDate = getNextDateForDay(callState.selectedDay);
-            }
-            if (callState.selectedDay === "Friday" || callState.selectedDay === "Saturday") {
-              if (!callState.timeWindow || callState.timeWindow === '10:00 to 10:30') {
-                ws.send(JSON.stringify({ type: "text", token: "Do you prefer morning or afternoon?", last: true }));
-                break;
-              }
-            }
-            ws.send(JSON.stringify({ type: "text", token: `Can I get your first and last name?`, last: true }));
-            break;
-          }
-
-          // ===== STEP 4: HANDLE NO =====
-          if (callState.selectedDay && !callState.dayConfirmed && text.includes("no")) {
-            callState.selectedDay = null;
-            ws.send(JSON.stringify({ type: "text", token: "Okay, no problem. Which day works better for you?", last: true }));
-            break;
-          }
-
+          // --- ZIP confirmation ---
           if (callState.awaitingZipConfirmation) {
-            const zipDecision = detectYesNoText(userText);
-            if (zipDecision === 'yes') {
+            const dec = detectYesNoText(userText);
+            if (dec === 'yes') {
               callState.awaitingZipConfirmation = false;
               callState.zipConfirmed = true;
-              const matchingCounties = getCountyForZip(callState.zip);
-              if (!matchingCounties.length) {
+              const counties = getCountyForZip(callState.zip);
+              if (!counties.length) {
                 reply = `Sorry, we do not service zip code ${callState.zip}.`;
               } else {
-                reply = `Yes, we service zip code ${callState.zip}. Would you like to schedule an appointment?`;
+                reply = `Great. Would you like to schedule an appointment?`;
                 callState.askedForSchedule = true;
               }
-            } else if (zipDecision === 'no') {
+            } else if (dec === 'no') {
               callState.awaitingZipConfirmation = false;
               callState.zip = '';
               reply = 'Okay. What is your five digit zip code?';
@@ -3143,36 +3018,35 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
+          // --- Machine ---
           if (!callState.machine) {
-            const detectedMachine = detectMachine(userText);
-            if (detectedMachine) callState.machine = detectedMachine;
+            const m = detectMachine(userText);
+            if (m) callState.machine = m;
           }
-
           if (!callState.machine) {
-            reply = 'What type of machine do you need help with?';
-            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+            ws.send(JSON.stringify({ type: 'text', token: 'What type of machine do you need help with?', last: true }));
             break;
           }
 
+          // --- Issue ---
           if (!callState.issue) {
-            const machineOnlyPhrases = ['lawnmower','lawn mower','mower','riding mower','lawn tractor','tractor','generator','pressure washer','power washer','snowblower','snow blower'];
-            const isMachineOnly = machineOnlyPhrases.includes(cleaned) || cleaned === cleanText(callState.machine);
-            const possibleZip = normalizeSpokenDigits(userText).slice(0, 5);
+            const machineWords = ['lawnmower','lawn mower','mower','riding mower','lawn tractor','tractor','generator','pressure washer','power washer','snowblower','snow blower'];
+            const isMachineOnly = machineWords.includes(cleaned) || cleaned === cleanText(callState.machine);
+            const possibleZip = normalizeSpokenDigits(userText).slice(0,5);
             if (!isMachineOnly && possibleZip.length !== 5) {
-              if (cleaned.includes('start') || cleaned.includes('won t') || cleaned.includes('wont') || cleaned.includes('not') || cleaned.includes('smoke') || cleaned.includes('smoking') || cleaned.includes('stall') || cleaned.includes('stalls') || cleaned.includes('surge') || cleaned.includes('surging') || cleaned.includes('leak') || cleaned.includes('broken') || cleaned.includes('repair') || cleaned.includes('fixed') || cleaned.includes('fix') || cleaned.includes('blade') || cleaned.includes('belt') || cleaned.includes('carb') || cleaned.includes('starter') || cleaned.includes('pull cord') || cleaned.split(' ').length >= 4) {
+              if (cleaned.includes('start') || cleaned.includes('won t') || cleaned.includes('wont') || cleaned.includes('not') || cleaned.includes('smoke') || cleaned.includes('stall') || cleaned.includes('surge') || cleaned.includes('leak') || cleaned.includes('broken') || cleaned.includes('repair') || cleaned.includes('fix') || cleaned.includes('blade') || cleaned.includes('belt') || cleaned.includes('carb') || cleaned.includes('starter') || cleaned.split(' ').length >= 4) {
                 callState.issue = userText.trim();
               }
             }
           }
-
           if (!callState.issue) {
-            reply = `What seems to be the issue with your ${callState.machine.toLowerCase()}?`;
-            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+            ws.send(JSON.stringify({ type: 'text', token: `What seems to be the issue with your ${callState.machine.toLowerCase()}?`, last: true }));
             break;
           }
 
+          // --- ZIP capture ---
           if (!callState.zipConfirmed) {
-            const possibleZip = normalizeSpokenDigits(userText).slice(0, 5);
+            const possibleZip = normalizeSpokenDigits(userText).slice(0,5);
             if (!callState.zip && possibleZip.length === 5) {
               callState.zip = possibleZip;
               callState.awaitingZipConfirmation = true;
@@ -3180,21 +3054,17 @@ wss.on('connection', (ws, req) => {
             } else if (!callState.zip) {
               reply = 'What is your five digit zip code?';
             } else {
-              reply = `I heard zip code ${callState.zip}. Is that correct?`;
               callState.awaitingZipConfirmation = true;
+              reply = `I heard zip code ${callState.zip}. Is that correct?`;
             }
             ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
             break;
           }
 
-          // 7. Schedule question after ZIP is confirmed
+          // --- Schedule offer ---
           if (callState.askedForSchedule) {
-            const wantsSchedule =
-              cleaned.includes('yes') ||
-              cleaned.includes('schedule') ||
-              cleaned.includes('book') ||
-              cleaned.includes('appointment');
-            if (wantsSchedule) {
+            const wants = cleaned.includes('yes') || cleaned.includes('schedule') || cleaned.includes('book') || cleaned.includes('appointment');
+            if (wants) {
               callState.askedForSchedule = false;
               callState.inScheduling = true;
               const slots = await findAvailableSlots(callState.zip, 1, 3);
@@ -3202,54 +3072,76 @@ wss.on('connection', (ws, req) => {
               if (!slots.length) {
                 reply = 'Sorry, there are no available appointments right now. Please call back soon.';
               } else {
-                // Build speech from real available slots
-                let slotSpeech = 'Here are our next available appointments. ';
+                reply = 'Here are our next available appointments. ';
                 slots.forEach((slot, i) => {
-                  let window;
-                  if (slot.serviceWindow === '10:00 to 10:30') {
-                    window = 'between ten and ten thirty in the morning';
-                  } else if (slot.serviceWindow === '10:00 to 12:00') {
-                    window = 'morning, between ten and noon';
-                  } else if (slot.serviceWindow === '1:00 to 4:00') {
-                    window = 'afternoon, between one and four';
-                  } else {
-                    window = slot.serviceWindow;
-                  }
-                  slotSpeech += `Option ${i + 1}, ${slot.readableDate}, ${window}. `;
+                  let win;
+                  if (slot.serviceWindow === '10:00 to 10:30') win = 'between ten and ten thirty in the morning';
+                  else if (slot.serviceWindow === '10:00 to 12:00') win = 'morning between ten and noon';
+                  else if (slot.serviceWindow === '1:00 to 4:00') win = 'afternoon between one and four';
+                  else win = slot.serviceWindow;
+                  reply += `Option ${i+1}, ${slot.readableDate}, ${win}. `;
                 });
-                slotSpeech += 'Which option works best for you? You can say option one, two, or three.';
-                reply = slotSpeech;
-                // Store offered slots so day detection uses real dates
-                callState.offeredSlots = slots;
+                reply += 'Which option works best for you?';
               }
             } else {
               callState.askedForSchedule = false;
-              reply = 'Okay. If you change your mind, we can still help.';
+              reply = 'Okay. If you change your mind, feel free to call us back.';
             }
             ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
             break;
           }
 
+          // --- Day/slot selection ---
+          if (callState.inScheduling && !callState.dayConfirmed) {
+            let matchedSlot = null;
+            const nt = cleaned;
+            if (nt.includes('option 1') || nt === '1' || nt.includes('one')) matchedSlot = callState.offeredSlots[0];
+            else if (nt.includes('option 2') || nt === '2' || nt.includes('two')) matchedSlot = callState.offeredSlots[1];
+            else if (nt.includes('option 3') || nt === '3' || nt.includes('three')) matchedSlot = callState.offeredSlots[2];
+            if (!matchedSlot) {
+              const days = ['monday','tuesday','wednesday','thursday','friday','saturday'];
+              const foundDay = days.find(d => text.includes(d));
+              if (foundDay) matchedSlot = callState.offeredSlots.find(s => s.serviceDay.toLowerCase() === foundDay);
+            }
+            if (matchedSlot) {
+              callState.selectedDay = matchedSlot.serviceDay;
+              callState.serviceDate = matchedSlot.serviceDate;
+              callState.timeWindow = matchedSlot.serviceWindow;
+              let win;
+              if (matchedSlot.serviceWindow === '10:00 to 10:30') win = 'ten to ten thirty in the morning';
+              else if (matchedSlot.serviceWindow === '10:00 to 12:00') win = 'morning between ten and noon';
+              else if (matchedSlot.serviceWindow === '1:00 to 4:00') win = 'afternoon between one and four';
+              else win = matchedSlot.serviceWindow;
+              ws.send(JSON.stringify({ type: 'text', token: `Got it, ${matchedSlot.readableDate}, ${win}. Does that sound right?`, last: true }));
+              break;
+            }
+            // No match yet - reprompt
+            ws.send(JSON.stringify({ type: 'text', token: 'Please say option one, two, or three.', last: true }));
+            break;
+          }
 
-
-          // ===== STEP 4B: CAPTURE MORNING/AFTERNOON FOR FRI/SAT =====
-          if (callState.dayConfirmed && !callState.timeWindow &&
-              (callState.selectedDay === 'Friday' || callState.selectedDay === 'Saturday')) {
-            if (text.includes('morning')) {
-              callState.timeWindow = '10:00 to 12:00';
-              callState.serviceDate = getNextDateForDay(callState.selectedDay);
-              ws.send(JSON.stringify({ type: 'text', token: 'Got it, morning works. Can I get your first and last name?', last: true }));
-            } else if (text.includes('afternoon')) {
-              callState.timeWindow = '1:00 to 4:00';
-              callState.serviceDate = getNextDateForDay(callState.selectedDay);
-              ws.send(JSON.stringify({ type: 'text', token: 'Got it, afternoon works. Can I get your first and last name?', last: true }));
+          // --- Confirm day yes/no ---
+          if (callState.selectedDay && !callState.dayConfirmed) {
+            if (text.includes('yes') || text.includes('correct') || text.includes('sounds right') || text.includes('that works')) {
+              callState.dayConfirmed = true;
+              ws.send(JSON.stringify({ type: 'text', token: 'Can I get your first and last name please?', last: true }));
+            } else if (text.includes('no')) {
+              callState.selectedDay = null;
+              callState.serviceDate = '';
+              callState.timeWindow = '';
+              ws.send(JSON.stringify({ type: 'text', token: 'No problem. Which option would you like instead?', last: true }));
             } else {
-              ws.send(JSON.stringify({ type: 'text', token: 'Do you prefer morning or afternoon?', last: true }));
+              let win;
+              if (callState.timeWindow === '10:00 to 10:30') win = 'ten to ten thirty in the morning';
+              else if (callState.timeWindow === '10:00 to 12:00') win = 'morning between ten and noon';
+              else if (callState.timeWindow === '1:00 to 4:00') win = 'afternoon between one and four';
+              else win = callState.timeWindow;
+              ws.send(JSON.stringify({ type: 'text', token: `Just to confirm, ${getReadableDate(callState.serviceDate)}, ${win}. Does that sound right?`, last: true }));
             }
             break;
           }
 
-          // ===== STEP 5: COLLECT NAME =====
+          // --- Name ---
           if (callState.dayConfirmed && !callState.callerName) {
             const rawName = normalizeNameText(userText);
             if (rawName && rawName.trim().length >= 2 && !/^\d+$/.test(rawName.trim())) {
@@ -3261,25 +3153,24 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
-          // ===== STEP 5B: COLLECT PHONE =====
-          if (callState.dayConfirmed && !callState.phone) {
-            const possiblePhone = normalizeSpokenDigits(userText);
-            const normalized = normalizeTenDigitPhone(possiblePhone);
-            if (normalized.length === 10) {
-              callState.phone = normalized;
-              const spokenNum = normalized.slice(0,3).split('').join(' ') + ', ' + normalized.slice(3,6).split('').join(' ') + ', ' + normalized.slice(6).split('').join(' ');
-              ws.send(JSON.stringify({ type: 'text', token: `I have ${spokenNum}. Is that correct?`, last: true }));
-              break;
+          // --- Phone ---
+          if (callState.callerName && !callState.phone) {
+            const digits = normalizeTenDigitPhone(normalizeSpokenDigits(userText));
+            if (digits.length === 10) {
+              callState.phone = digits;
+              const spk = digits.slice(0,3).split('').join(' ') + ', ' + digits.slice(3,6).split('').join(' ') + ', ' + digits.slice(6).split('').join(' ');
+              ws.send(JSON.stringify({ type: 'text', token: `I have ${spk}. Is that correct?`, last: true }));
+            } else {
+              ws.send(JSON.stringify({ type: 'text', token: 'What is the best phone number to reach you at?', last: true }));
             }
-            ws.send(JSON.stringify({ type: 'text', token: 'What phone number should we use?', last: true }));
             break;
           }
 
-          // ===== STEP 6: CONFIRM PHONE =====
+          // --- Confirm phone ---
           if (callState.phone && !callState.phoneConfirmed) {
             if (text.includes('yes') || text.includes('correct')) {
               callState.phoneConfirmed = true;
-              ws.send(JSON.stringify({ type: 'text', token: 'Got it. What is the service address?', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'What is the service address?', last: true }));
             } else {
               callState.phone = null;
               ws.send(JSON.stringify({ type: 'text', token: 'Okay. What is the correct phone number?', last: true }));
@@ -3287,51 +3178,47 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
-          // ===== STEP 7: COLLECT ADDRESS =====
+          // --- Address ---
           if (callState.phoneConfirmed && !callState.address) {
-            const rawAddress = String(userText || '').trim();
-            if (rawAddress.length >= 5) {
-              callState.address = normalizeAddressText(applyLocalCorrections(rejoinSpacedDigits(rawAddress)));
-              const addrForSpeech = formatStreetNumberForSpeech(callState.address);
-              ws.send(JSON.stringify({ type: 'text', token: `I have your address as ${addrForSpeech}. Is that correct?`, last: true }));
+            const raw = String(userText || '').trim();
+            if (raw.length >= 5) {
+              callState.address = normalizeAddressText(applyLocalCorrections(rejoinSpacedDigits(raw)));
+              const addrSpeak = formatStreetNumberForSpeech(callState.address);
+              ws.send(JSON.stringify({ type: 'text', token: `I have ${addrSpeak}. Is that correct?`, last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: 'What is the service address?', last: true }));
             }
             break;
           }
 
-          // ===== STEP 8: CONFIRM ADDRESS =====
+          // --- Confirm address ---
           if (callState.address && !callState.addressConfirmed) {
             if (text.includes('yes') || text.includes('correct')) {
               callState.addressConfirmed = true;
-              ws.send(JSON.stringify({ type: 'text', token: 'Great. What email address should we send the confirmation to?', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'What email address should we send the confirmation to?', last: true }));
             } else {
               callState.address = null;
-              ws.send(JSON.stringify({ type: 'text', token: 'Okay. What is the correct service address?', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'What is the correct service address?', last: true }));
             }
             break;
           }
 
-          // ===== STEP 9: COLLECT EMAIL =====
+          // --- Email ---
           if (callState.addressConfirmed && !callState.email) {
-            const rawEmail = normalizeEmailSpeech(userText);
-            const cleanedEmail = sanitizeLooseEmail(rawEmail);
-            if (cleanedEmail && cleanedEmail.includes('@')) {
-              callState.email = cleanedEmail;
-              const spoken = formatEmailForSpeech(cleanedEmail);
-              ws.send(JSON.stringify({ type: 'text', token: `I have your email as ${spoken}. Is that correct?`, last: true }));
+            const rawEmail = sanitizeLooseEmail(normalizeEmailSpeech(userText));
+            if (rawEmail && rawEmail.includes('@')) {
+              callState.email = rawEmail;
+              ws.send(JSON.stringify({ type: 'text', token: `I have ${formatEmailForSpeech(rawEmail)}. Is that correct?`, last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: 'What email address should we send the confirmation to?', last: true }));
             }
             break;
           }
 
-          // ===== STEP 10: CONFIRM EMAIL =====
+          // --- Confirm email + book ---
           if (callState.email && !callState.emailConfirmed) {
             if (text.includes('yes') || text.includes('correct')) {
               callState.emailConfirmed = true;
-
-              // Save the job
               const job = {
                 id: generateJobId(),
                 requestType: 'Appointment Request',
@@ -3344,34 +3231,27 @@ wss.on('connection', (ws, req) => {
                 email: callState.email || '',
                 serviceDate: callState.serviceDate || '',
                 serviceDay: callState.selectedDay || '',
-                serviceWindow: callState.timeWindow || (callState.selectedDay === 'Monday' || callState.selectedDay === 'Tuesday' || callState.selectedDay === 'Wednesday' || callState.selectedDay === 'Thursday' ? '10:00 to 10:30' : ''),
+                serviceWindow: callState.timeWindow || '',
                 time: getEasternTimestamp()
               };
               saveJob(job);
-
-              // Send confirmation email
               try {
                 await sendAppointmentConfirmationEmail({
                   to: callState.email,
-                  name: callState.callerName || 'Phone Caller',
+                  name: callState.callerName || 'Customer',
                   machine: callState.machine,
                   issue: callState.issue,
-                  serviceDate: job.serviceDate || '',
-                  serviceWindow: job.serviceWindow || callState.timeWindow || (callState.selectedDay === 'Monday' || callState.selectedDay === 'Tuesday' || callState.selectedDay === 'Wednesday' || callState.selectedDay === 'Thursday' ? '10:00 to 10:30' : ''),
+                  serviceDate: callState.serviceDate || callState.selectedDay || '',
+                  serviceWindow: callState.timeWindow || '',
                   address: callState.address
                 });
-              } catch (err) {
-                console.error('Email send failed:', err);
-              }
-
-              const readableSvcDate = callState.serviceDate ? getReadableDate(callState.serviceDate) : (callState.selectedDay || 'the selected day');
-              const dayLine = `on ${readableSvcDate} between ${callState.timeWindow || ''}`;
-
-              ws.send(JSON.stringify({ type: 'text', token: `You are all set. Your appointment is confirmed ${dayLine}. We will send a confirmation to ${formatEmailForSpeech(callState.email)}. Thank you and have a great day.`, last: true }));
+              } catch (err) { console.error('Email failed:', err); }
+              const readableAppt = callState.serviceDate ? getReadableDate(callState.serviceDate) : callState.selectedDay;
+              ws.send(JSON.stringify({ type: 'text', token: `You are all set, ${callState.callerName}. Your appointment is confirmed for ${readableAppt} between ${callState.timeWindow}. A confirmation is on its way to ${formatEmailForSpeech(callState.email)}. Thank you and have a great day.`, last: true }));
               callState.booked = true;
             } else {
               callState.email = null;
-              ws.send(JSON.stringify({ type: 'text', token: 'Okay. What is the correct email address?', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'What is the correct email address?', last: true }));
             }
             break;
           }
@@ -3381,22 +3261,21 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
-          reply = 'Okay.';
-          ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+          // Fallback to AI
+          const aiReply = await getAIResponse(userText);
+          ws.send(JSON.stringify({ type: 'text', token: aiReply, last: true }));
           break;
         }
-                case 'interrupt':
-          console.log('Caller interrupted playback');
+        case 'interrupt':
+          console.log('Caller interrupted');
           break;
         default:
-          console.log('Unhandled ConversationRelay event:', data.type);
+          console.log('Unhandled event:', data.type);
           break;
       }
     } catch (err) {
       console.error('WebSocket error:', err);
     }
   });
-  ws.on('close', () => {
-    console.log('ConversationRelay disconnected');
-  });
+  ws.on('close', () => console.log('ConversationRelay disconnected'));
 });
