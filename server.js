@@ -12,28 +12,23 @@ const JOBS_FILE = 'jobs.json';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 
 const SYSTEM_PROMPT = `
-You are Emma, the AI receptionist for RL Small Engines.
-Speak naturally, briefly, and professionally. Sound like a real person.
-Keep replies short - usually one sentence.
-Business rules:
-- Mobile service only. No drop-offs.
-- Do not quote exact prices.
-- Get machine and issue clearly.
-- Get ZIP code before scheduling.
-- If outside service area, politely decline.
-- Never promise callbacks unless customer insists.
-Conversation order:
-1. Identify machine and issue from what caller said.
-2. If machine missing, ask for machine.
-3. If issue missing, ask for issue.
-4. If both known, ask for ZIP code.
-5. After ZIP confirmed, ask if they want to schedule.
-6. If yes, offer real available appointment slots.
-7. Collect name, phone, address, email to complete booking.
-Examples:
-- "My lawnmower won't start" -> ask for ZIP.
-- "I need my generator repaired" -> ask what it's doing.
-- "I need repair" -> ask what type of machine.
+You are Emma, the phone assistant for RL Small Engines.
+
+Speak naturally and professionally.
+
+Rules:
+- RL Small Engines is a mobile service only. No drop-off.
+- Pricing depends on the problem. Do not quote exact prices.
+- Keep callbacks to a minimum.
+- Get the machine and issue clearly.
+- Get the ZIP code before discussing scheduling.
+- If outside the service area, politely say so and stop scheduling.
+- Only follow supported machine and brand rules.
+- If the customer rambles, politely redirect and ask one question at a time.
+- Do not over-diagnose.
+- Offer up to 3 real appointment choices when scheduling.
+- Never promise squeeze-ins or call-backs if something opens up.
+- Sound natural, not robotic.
 `;
 
 async function getAIResponse(userInput) {
@@ -45,24 +40,26 @@ async function getAIResponse(userInput) {
     },
     body: JSON.stringify({
       model: 'gpt-4.1-mini',
-      input: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: userInput }]
+      input: [
+        {
+          role: 'system',
+          content: SYSTEM_PROMPT
+        },
+        {
+          role: 'user',
+          content: userInput
+        }
+      ]
     })
   });
+
   const data = await response.json();
+
   if (!response.ok) {
-    console.error('OpenAI error:', JSON.stringify(data));
     throw new Error(data.error?.message || 'OpenAI request failed');
   }
-  if (typeof data.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
-  if (Array.isArray(data.output)) {
-    for (const item of data.output) {
-      if (!item || !Array.isArray(item.content)) continue;
-      for (const part of item.content) {
-        if (part?.type === 'output_text' && typeof part.text === 'string' && part.text.trim()) return part.text.trim();
-      }
-    }
-  }
-  return 'I got that. Tell me the main issue you are having with the machine.';
+
+  return data.output_text || 'Okay, tell me a little more about that.';
 }
 
 
@@ -454,8 +451,9 @@ function normalizeNameText(name) {
     .split(/\s+/)
     .map((word) => {
       if (!word) return word;
-      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+      return word.replace(/[.,;:!?]+$/, '').charAt(0).toUpperCase() + word.replace(/[.,;:!?]+$/, '').slice(1).toLowerCase();
     })
+    .filter(Boolean)
     .join(' ')
     .trim();
 }
@@ -1387,12 +1385,15 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
 // ===== CALL FLOW START =====
 function buildVoiceTwiml(req) {
   const wsUrl = `wss://${req.get('host')}/conversation-relay`;
+
   return `
 <Response>
   <Connect>
     <ConversationRelay
       url="${xmlEscape(wsUrl)}"
       welcomeGreeting="Thanks for calling RL Small Engines. What can I help you with today?"
+      ttsProvider="Amazon Polly"
+      voice="Ruth"
     />
   </Connect>
 </Response>
@@ -1426,11 +1427,6 @@ app.get('/test-email', wrapRoute(async (req, res) => {
 
 app.get('/test-ai', wrapRoute(async (req, res) => {
   const reply = await getAIResponse('Customer says: My riding mower will not start and I am in zip code 21144. What would you say next?');
-  res.status(200).type('text/plain').send(reply);
-}));
-
-app.get('/test-ai', wrapRoute(async (req, res) => {
-  const reply = await getAIResponse('Customer says: My riding mower will not start. What would you say next?');
   res.status(200).type('text/plain').send(reply);
 }));
 
@@ -2951,7 +2947,8 @@ function getNextDateForDay(dayName) {
 }
 
 function rejoinSpacedDigits(text) {
-  return String(text || '').replace(/\b(\d\s){2,}\d\b/g, (match) => match.replace(/\s/g, ''));
+  return String(text || '')
+    .replace(/(\b\d{1,2}\s){1,}\d{1,2}\b/g, (match) => match.replace(/\s/g, ''));
 }
 
 function formatStreetNumberForSpeech(address) {
@@ -3034,7 +3031,32 @@ wss.on('connection', (ws, req) => {
             const isMachineOnly = machineWords.includes(cleaned) || cleaned === cleanText(callState.machine);
             const possibleZip = normalizeSpokenDigits(userText).slice(0,5);
             if (!isMachineOnly && possibleZip.length !== 5) {
-              if (cleaned.includes('start') || cleaned.includes('won t') || cleaned.includes('wont') || cleaned.includes('not') || cleaned.includes('smoke') || cleaned.includes('stall') || cleaned.includes('surge') || cleaned.includes('leak') || cleaned.includes('broken') || cleaned.includes('repair') || cleaned.includes('fix') || cleaned.includes('blade') || cleaned.includes('belt') || cleaned.includes('carb') || cleaned.includes('starter') || cleaned.split(' ').length >= 4) {
+              // Only capture issue if caller described an actual symptom or problem
+              // "I need it fixed" or "repaired" alone is NOT enough - need a symptom
+              const vagueOnly =
+                (cleaned === 'fixed' || cleaned === 'repaired' || cleaned === 'serviced' ||
+                 cleaned === 'looked at' || cleaned === 'checked' || cleaned === 'worked on') ||
+                (cleaned.split(' ').length <= 4 &&
+                 (cleaned === 'i need it fixed' || cleaned === 'need it fixed' ||
+                  cleaned === 'i need it repaired' || cleaned === 'need it repaired' ||
+                  cleaned === 'i need it serviced' || cleaned === 'need it serviced' ||
+                  cleaned === 'i need it looked at' || cleaned === 'need it looked at' ||
+                  cleaned === 'fix it' || cleaned === 'repair it'));
+
+              if (!vagueOnly && (
+                cleaned.includes('start') || cleaned.includes('won t') || cleaned.includes('wont') ||
+                cleaned.includes('smoke') || cleaned.includes('stall') || cleaned.includes('surge') ||
+                cleaned.includes('leak') || cleaned.includes('broken') || cleaned.includes('blade') ||
+                cleaned.includes('belt') || cleaned.includes('carb') || cleaned.includes('starter') ||
+                cleaned.includes('tune') || cleaned.includes('oil') || cleaned.includes('pull') ||
+                cleaned.includes('dead') || cleaned.includes('flat') || cleaned.includes('tire') ||
+                cleaned.includes('battery') || cleaned.includes('cut') || cleaned.includes('clog') ||
+                cleaned.includes('overheat') || cleaned.includes('backfire') || cleaned.includes('spark') ||
+                cleaned.includes('shut') || cleaned.includes('click') || cleaned.includes('noise') ||
+                cleaned.includes('vibrat') || cleaned.includes('power') || cleaned.includes('fuel') ||
+                cleaned.includes('choke') || cleaned.includes('flood') || cleaned.includes('run') ||
+                cleaned.split(' ').length >= 5
+              )) {
                 callState.issue = userText.trim();
               }
             }
@@ -3117,7 +3139,6 @@ wss.on('connection', (ws, req) => {
               ws.send(JSON.stringify({ type: 'text', token: `Got it, ${matchedSlot.readableDate}, ${win}. Does that sound right?`, last: true }));
               break;
             }
-            // No match yet - reprompt
             ws.send(JSON.stringify({ type: 'text', token: 'Please say option one, two, or three.', last: true }));
             break;
           }
