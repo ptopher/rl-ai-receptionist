@@ -1392,8 +1392,6 @@ function buildVoiceTwiml(req) {
     <ConversationRelay
       url="${xmlEscape(wsUrl)}"
       welcomeGreeting="Thanks for calling RL Small Engines. What can I help you with today?"
-      ttsProvider="Amazon Polly"
-      voice="Ruth"
     />
   </Connect>
 </Response>
