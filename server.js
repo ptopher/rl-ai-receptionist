@@ -3031,17 +3031,9 @@ wss.on('connection', (ws, req) => {
             if (!isMachineOnly && possibleZip.length !== 5) {
               // Only capture issue if caller described an actual symptom or problem
               // "I need it fixed" or "repaired" alone is NOT enough - need a symptom
-              const vagueOnly =
-                (cleaned === 'fixed' || cleaned === 'repaired' || cleaned === 'serviced' ||
-                 cleaned === 'looked at' || cleaned === 'checked' || cleaned === 'worked on') ||
-                (cleaned.split(' ').length <= 4 &&
-                 (cleaned === 'i need it fixed' || cleaned === 'need it fixed' ||
-                  cleaned === 'i need it repaired' || cleaned === 'need it repaired' ||
-                  cleaned === 'i need it serviced' || cleaned === 'need it serviced' ||
-                  cleaned === 'i need it looked at' || cleaned === 'need it looked at' ||
-                  cleaned === 'fix it' || cleaned === 'repair it'));
-
-              if (!vagueOnly && (
+              // Only capture issue if caller described an actual symptom
+              // Vague phrases like "work done", "get it fixed", "need service" are NOT enough
+              const hasSymptom = (
                 cleaned.includes('start') || cleaned.includes('won t') || cleaned.includes('wont') ||
                 cleaned.includes('smoke') || cleaned.includes('stall') || cleaned.includes('surge') ||
                 cleaned.includes('leak') || cleaned.includes('broken') || cleaned.includes('blade') ||
@@ -3050,11 +3042,23 @@ wss.on('connection', (ws, req) => {
                 cleaned.includes('dead') || cleaned.includes('flat') || cleaned.includes('tire') ||
                 cleaned.includes('battery') || cleaned.includes('cut') || cleaned.includes('clog') ||
                 cleaned.includes('overheat') || cleaned.includes('backfire') || cleaned.includes('spark') ||
-                cleaned.includes('shut') || cleaned.includes('click') || cleaned.includes('noise') ||
-                cleaned.includes('vibrat') || cleaned.includes('power') || cleaned.includes('fuel') ||
-                cleaned.includes('choke') || cleaned.includes('flood') || cleaned.includes('run') ||
-                cleaned.split(' ').length >= 5
-              )) {
+                cleaned.includes('shut off') || cleaned.includes('click') || cleaned.includes('noise') ||
+                cleaned.includes('vibrat') || cleaned.includes('fuel') || cleaned.includes('choke') ||
+                cleaned.includes('flood') || cleaned.includes('not running') || cleaned.includes('dies') ||
+                cleaned.includes('sputt') || cleaned.includes('rpm') || cleaned.includes('throttle') ||
+                cleaned.includes('string') || cleaned.includes('deck') || cleaned.includes('brake')
+              );
+
+              const vaguePhrase = (
+                cleaned.includes('work done') || cleaned.includes('worked on') ||
+                cleaned.includes('get it fix') || cleaned.includes('need it fix') ||
+                cleaned.includes('need fix') || cleaned.includes('need repair') ||
+                cleaned.includes('need service') || cleaned.includes('get service') ||
+                cleaned.includes('looked at') || cleaned.includes('checked out') ||
+                cleaned.includes('tune up') && cleaned.split(' ').length <= 3
+              );
+
+              if (hasSymptom && !vaguePhrase) {
                 callState.issue = userText.trim();
               }
             }
