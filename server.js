@@ -169,6 +169,10 @@ const countyZips = {
 // ===== LOCAL CORRECTION LAYER =====
 const exactPhraseCorrections = [
   ['bevern', 'severn'],
+  ['saverne', 'severn'],
+  ['savern', 'severn'],
+  ['saverne maryland', 'severn maryland'],
+  ['savern maryland', 'severn maryland'],
   ['seven maryland', 'severn maryland'],
   ['7 maryland', 'severn maryland'],
   ['severn marylin', 'severn maryland'],
@@ -202,6 +206,8 @@ const exactPhraseCorrections = [
 
 const wordCorrections = {
   bevern: 'severn',
+  saverne: 'severn',
+  savern: 'severn',
   sevenn: 'severn',
   severnn: 'severn',
   stubborn: 'severn',
@@ -445,8 +451,9 @@ function normalizeNameText(name) {
     .split(/\s+/)
     .map((word) => {
       if (!word) return word;
-      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+      return word.replace(/[.,;:!?]+$/, '').charAt(0).toUpperCase() + word.replace(/[.,;:!?]+$/, '').slice(1).toLowerCase();
     })
+    .filter(Boolean)
     .join(' ')
     .trim();
 }
@@ -659,6 +666,7 @@ function formatEmailForSpeech(email) {
     .replace(/_/g, ' underscore ')
     .replace(/-/g, ' dash ')
     .replace(/\+/g, ' plus ')
+    .replace(/\d+/g, (n) => n.split('').join(' '))
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -2919,11 +2927,8 @@ process.on('uncaughtException', (error) => {
 });
 
 const PORT = process.env.PORT || 3000;
-// Create HTTP server
-const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-// Attach WebSocket server to same HTTP server
+const server = app.listen(PORT, () => { console.log(`Server running on port ${PORT}`); });
+
 const wss = new WebSocket.Server({ server });
 
 function getNextDateForDay(dayName) {
@@ -2940,7 +2945,8 @@ function getNextDateForDay(dayName) {
 }
 
 function rejoinSpacedDigits(text) {
-  return String(text || '').replace(/(\b\d{1,2}\s){1,}\d{1,2}\b/g, (match) => match.replace(/\s/g, ''));
+  return String(text || '')
+    .replace(/(\b\d{1,2}\s){1,}\d{1,2}\b/g, (match) => match.replace(/\s/g, ''));
 }
 
 function formatStreetNumberForSpeech(address) {
@@ -3023,6 +3029,10 @@ wss.on('connection', (ws, req) => {
             const isMachineOnly = machineWords.includes(cleaned) || cleaned === cleanText(callState.machine);
             const possibleZip = normalizeSpokenDigits(userText).slice(0,5);
             if (!isMachineOnly && possibleZip.length !== 5) {
+              // Only capture issue if caller described an actual symptom or problem
+              // "I need it fixed" or "repaired" alone is NOT enough - need a symptom
+              // Only capture issue if caller described an actual symptom
+              // Vague phrases like "work done", "get it fixed", "need service" are NOT enough
               const hasSymptom = (
                 cleaned.includes('start') || cleaned.includes('won t') || cleaned.includes('wont') ||
                 cleaned.includes('smoke') || cleaned.includes('stall') || cleaned.includes('surge') ||
@@ -3038,14 +3048,16 @@ wss.on('connection', (ws, req) => {
                 cleaned.includes('sputt') || cleaned.includes('rpm') || cleaned.includes('throttle') ||
                 cleaned.includes('string') || cleaned.includes('deck') || cleaned.includes('brake')
               );
+
               const vaguePhrase = (
                 cleaned.includes('work done') || cleaned.includes('worked on') ||
                 cleaned.includes('get it fix') || cleaned.includes('need it fix') ||
                 cleaned.includes('need fix') || cleaned.includes('need repair') ||
                 cleaned.includes('need service') || cleaned.includes('get service') ||
                 cleaned.includes('looked at') || cleaned.includes('checked out') ||
-                (cleaned.includes('tune up') && cleaned.split(' ').length <= 3)
+                cleaned.includes('tune up') && cleaned.split(' ').length <= 3
               );
+
               if (hasSymptom && !vaguePhrase) {
                 callState.issue = userText.trim();
               }
@@ -3079,12 +3091,21 @@ wss.on('connection', (ws, req) => {
             if (wants) {
               callState.askedForSchedule = false;
               callState.inScheduling = true;
-              const slots = await findAvailableSlots(callState.zip, 1, 7);
+              const slots = await findAvailableSlots(callState.zip, 1, 3);
               callState.offeredSlots = slots;
               if (!slots.length) {
                 reply = 'Sorry, there are no available appointments right now. Please call back soon.';
               } else {
-                reply = buildAvailabilitySpeech(slots);
+                reply = 'Here are our next available appointments. ';
+                slots.forEach((slot, i) => {
+                  let win;
+                  if (slot.serviceWindow === '10:00 to 10:30') win = 'between ten and ten thirty in the morning';
+                  else if (slot.serviceWindow === '10:00 to 12:00') win = 'morning between ten and noon';
+                  else if (slot.serviceWindow === '1:00 to 4:00') win = 'afternoon between one and four';
+                  else win = slot.serviceWindow;
+                  reply += `Option ${i+1}, ${slot.readableDate}, ${win}. `;
+                });
+                reply += 'Which option works best for you?';
               }
             } else {
               callState.askedForSchedule = false;
@@ -3103,21 +3124,9 @@ wss.on('connection', (ws, req) => {
             else if (nt === 'option 2' || digits === '2' || nt === 'two' || nt === 'second') matchedSlot = callState.offeredSlots[1];
             else if (nt === 'option 3' || digits === '3' || nt === 'three' || nt === 'third') matchedSlot = callState.offeredSlots[2];
             if (!matchedSlot) {
-              for (const slot of callState.offeredSlots) {
-                const day = slot.serviceDay.toLowerCase();
-                const datePhrase = cleanText(formatDateShortForSpeech(slot.serviceDate));
-                const isMorning = slot.serviceWindow === '10:00 to 12:00';
-                const isAfternoon = slot.serviceWindow === '1:00 to 4:00';
-                const isMonThu = slot.serviceWindow === '10:00 to 10:30';
-                if (nt.includes(day) && isMonThu) { matchedSlot = slot; break; }
-                if (nt.includes(day) && isMorning && nt.includes('morning')) { matchedSlot = slot; break; }
-                if (nt.includes(day) && isAfternoon && nt.includes('afternoon')) { matchedSlot = slot; break; }
-                if (nt.includes(datePhrase)) {
-                  if (isMorning && nt.includes('afternoon')) continue;
-                  if (isAfternoon && nt.includes('morning')) continue;
-                  matchedSlot = slot; break;
-                }
-              }
+              const days = ['monday','tuesday','wednesday','thursday','friday','saturday'];
+              const foundDay = days.find(d => nt === d || nt.startsWith(d));
+              if (foundDay) matchedSlot = callState.offeredSlots.find(s => s.serviceDay.toLowerCase() === foundDay);
             }
             if (matchedSlot) {
               callState.selectedDay = matchedSlot.serviceDay;
@@ -3132,7 +3141,7 @@ wss.on('connection', (ws, req) => {
               ws.send(JSON.stringify({ type: 'text', token: `Got it, ${matchedSlot.readableDate}, ${win}. Does that sound right?`, last: true }));
               break;
             }
-            ws.send(JSON.stringify({ type: 'text', token: 'Please say the day or date you prefer.', last: true }));
+            ws.send(JSON.stringify({ type: 'text', token: 'Please say option one, two, or three.', last: true }));
             break;
           }
 
@@ -3145,8 +3154,7 @@ wss.on('connection', (ws, req) => {
               callState.selectedDay = null;
               callState.serviceDate = '';
               callState.timeWindow = '';
-              callState.inScheduling = true;
-              ws.send(JSON.stringify({ type: 'text', token: 'No problem. ' + buildAvailabilitySpeech(callState.offeredSlots), last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'No problem. Which option would you like instead?', last: true }));
             } else {
               let win;
               if (callState.timeWindow === '10:00 to 10:30') win = 'ten to ten thirty in the morning';
