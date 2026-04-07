@@ -2999,7 +2999,7 @@ wss.on('connection', (ws, req) => {
               if (!counties.length) {
                 reply = `Sorry, we do not service zip code ${callState.zip}.`;
               } else {
-                reply = `Great. Would you like to schedule an appointment?`;
+                reply = `Great, we do service that area. Would you like to schedule an appointment?`;
                 callState.askedForSchedule = true;
               }
             } else if (dec === 'no') {
