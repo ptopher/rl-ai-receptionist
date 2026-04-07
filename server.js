@@ -763,6 +763,95 @@ function getAppointmentJobsForDate(jobs, serviceDate) {
   );
 }
 
+function formatServiceWindowForSpeech(serviceWindow) {
+  if (serviceWindow === '10:00 to 10:30') return '10:00 to 10:30';
+  if (serviceWindow === '10:00 to 12:00') return '10:00 to 12:00';
+  if (serviceWindow === '1:00 to 4:00') return '1:00 to 4:00';
+  return serviceWindow || '';
+}
+
+function formatDateShortForSpeech(serviceDate) {
+  if (!serviceDate) return '';
+  const dt = new Date(`${serviceDate}T12:00:00`);
+  return dt.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+}
+
+function buildAvailabilitySpeech(slots) {
+  if (!slots || !slots.length) return 'There are no available appointments right now.';
+
+  const monThuSlots = slots.filter(s => ['Monday','Tuesday','Wednesday','Thursday'].includes(s.serviceDay));
+  const fridaySlots = slots.filter(s => s.serviceDay === 'Friday');
+  const saturdaySlots = slots.filter(s => s.serviceDay === 'Saturday');
+  const parts = [];
+
+  if (monThuSlots.length) {
+    const dates = monThuSlots.map(s => formatDateShortForSpeech(s.serviceDate));
+    const firstDay = monThuSlots[0].serviceDay;
+    const lastDay = monThuSlots[monThuSlots.length - 1].serviceDay;
+    const dayRange = monThuSlots.length > 1 && firstDay !== lastDay ? `${firstDay} through ${lastDay}` : firstDay;
+    parts.push(`We have ${dayRange}, 10:00 to 10:30. The available dates are ${dates.join(', ')}.`);
+  }
+
+  if (fridaySlots.length) {
+    const fridayMorning = fridaySlots.find(s => s.serviceWindow === '10:00 to 12:00');
+    const fridayAfternoon = fridaySlots.find(s => s.serviceWindow === '1:00 to 4:00');
+    const fridayDate = formatDateShortForSpeech(fridaySlots[0].serviceDate);
+    if (fridayMorning && fridayAfternoon) parts.push(`Friday, ${fridayDate}, has morning from 10:00 to 12:00 and afternoon from 1:00 to 4:00.`);
+    else if (fridayMorning) parts.push(`Friday, ${fridayDate}, has morning from 10:00 to 12:00 available.`);
+    else if (fridayAfternoon) parts.push(`Friday, ${fridayDate}, has afternoon from 1:00 to 4:00 available.`);
+  }
+
+  if (saturdaySlots.length) {
+    const saturdayMorning = saturdaySlots.find(s => s.serviceWindow === '10:00 to 12:00');
+    const saturdayAfternoon = saturdaySlots.find(s => s.serviceWindow === '1:00 to 4:00');
+    const saturdayDate = formatDateShortForSpeech(saturdaySlots[0].serviceDate);
+    if (saturdayMorning && saturdayAfternoon) parts.push(`Saturday, ${saturdayDate}, has morning from 10:00 to 12:00 and afternoon from 1:00 to 4:00.`);
+    else if (saturdayMorning) parts.push(`Saturday, ${saturdayDate}, has morning from 10:00 to 12:00 available.`);
+    else if (saturdayAfternoon) parts.push(`Saturday, ${saturdayDate}, has afternoon from 1:00 to 4:00 available.`);
+  }
+
+  return `${parts.join(' ')} What works best for you?`;
+}
+
+function detectSpokenSlotSelection(req, slots) {
+  if (!slots || !slots.length) return null;
+
+  const digit = String(req.body.Digits || '').trim();
+  if (digit === '1' || digit === '2' || digit === '3') return slots[parseInt(digit, 10) - 1] || null;
+
+  const cleaned = cleanText(req.body.SpeechResult || '');
+  if (!cleaned) return null;
+
+  if (cleaned.includes('option 1') || cleaned === '1' || cleaned.includes('first option') || cleaned === 'first') return slots[0] || null;
+  if (cleaned.includes('option 2') || cleaned === '2' || cleaned.includes('second option') || cleaned === 'second') return slots[1] || null;
+  if (cleaned.includes('option 3') || cleaned === '3' || cleaned.includes('third option') || cleaned === 'third') return slots[2] || null;
+
+  for (const slot of slots) {
+    const day = slot.serviceDay.toLowerCase();
+    const datePhrase = cleanText(formatDateShortForSpeech(slot.serviceDate));
+    const dayNumberOnly = String(new Date(`${slot.serviceDate}T12:00:00`).getDate());
+    const monthOnly = cleanText(new Date(`${slot.serviceDate}T12:00:00`).toLocaleDateString('en-US', { month: 'long' }));
+    const isMorning = slot.serviceWindow === '10:00 to 12:00';
+    const isAfternoon = slot.serviceWindow === '1:00 to 4:00';
+    const isMonThu = slot.serviceWindow === '10:00 to 10:30';
+
+    if (cleaned.includes(day) && isMonThu) return slot;
+    if (cleaned.includes(day) && isMorning && cleaned.includes('morning')) return slot;
+    if (cleaned.includes(day) && isAfternoon && cleaned.includes('afternoon')) return slot;
+    if (cleaned.includes(datePhrase)) {
+      if (isMorning && cleaned.includes('afternoon')) continue;
+      if (isAfternoon && cleaned.includes('morning')) continue;
+      return slot;
+    }
+    if (cleaned.includes(monthOnly) && cleaned.includes(dayNumberOnly)) {
+      if (isMorning && cleaned.includes('afternoon')) continue;
+      if (isAfternoon && cleaned.includes('morning')) continue;
+      return slot;
+    }
+  }
+  return null;
+}
+
 function buildOptionSpeech(slots) {
   let speech = 'Here are the next available appointments. ';
   slots.forEach((slot, index) => {
@@ -1562,7 +1651,7 @@ app.post('/getZipForAppointment', wrapRoute(async (req, res) => {
   const issue = req.query.issue || 'Unknown';
   const zip = (req.body.Digits || '').slice(0, 5);
 
-  const slots = await findAvailableSlots(zip, 1, 3);
+  const slots = await findAvailableSlots(zip, 1, 7);
 
   res.type('text/xml');
 
@@ -1576,7 +1665,7 @@ app.post('/getZipForAppointment', wrapRoute(async (req, res) => {
     return;
   }
 
-  const optionsSpeech = buildOptionSpeech(slots);
+  const availabilitySpeech = buildAvailabilitySpeech(slots);
   const selectUrl = absoluteUrl(
     req,
     `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=1`
@@ -1586,9 +1675,9 @@ app.post('/getZipForAppointment', wrapRoute(async (req, res) => {
 <Response>
   ${say(`Thanks. ${digitsToWords(zip)} is in our service area.`)}
   ${pause(1)}
-  ${say(optionsSpeech)}
-  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(selectUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Press or say option 1, 2, or 3. You can also say next week or two weeks out.")}
+  ${say(availabilitySpeech)}
+  <Gather input="speech dtmf" action="${xmlEscape(selectUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("You can say a day, a date, or Friday or Saturday morning or afternoon.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
@@ -1604,24 +1693,22 @@ app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
 
   const speechText = req.body.SpeechResult || '';
   const futureOffset = detectFutureOffsetDays(speechText);
-  const selectedOption = detectOptionSelection(req);
 
   res.type('text/xml');
 
   if (futureOffset !== null) {
-    const futureSlots = await findAvailableSlots(zip, futureOffset, 3);
+    const futureSlots = await findAvailableSlots(zip, futureOffset, 7);
 
     if (!futureSlots.length) {
       const retryUrl = absoluteUrl(
         req,
         `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=${encodeURIComponent(currentStartOffset)}`
       );
-
       res.send(`
 <Response>
   ${say("I could not find appointments in that time frame.")}
-  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Please say or press option 1, 2, or 3.")}
+  <Gather input="speech dtmf" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say a day, a date, or Friday or Saturday morning or afternoon.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
@@ -1629,17 +1716,16 @@ app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
       return;
     }
 
-    const futureSpeech = buildOptionSpeech(futureSlots);
+    const futureSpeech = buildAvailabilitySpeech(futureSlots);
     const futureUrl = absoluteUrl(
       req,
       `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=${encodeURIComponent(futureOffset)}`
     );
-
     res.send(`
 <Response>
   ${say(futureSpeech)}
-  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(futureUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Press or say option 1, 2, or 3.")}
+  <Gather input="speech dtmf" action="${xmlEscape(futureUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say the day, the date, or Friday or Saturday morning or afternoon.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
@@ -1647,40 +1733,19 @@ app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
     return;
   }
 
-  if (!selectedOption) {
-    const currentSlots = await findAvailableSlots(zip, currentStartOffset, 3);
-    const currentSpeech = currentSlots.length ? buildOptionSpeech(currentSlots) : '';
-    const retryUrl = absoluteUrl(
-      req,
-      `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=${encodeURIComponent(currentStartOffset)}`
-    );
-
-    res.send(`
-<Response>
-  ${currentSpeech ? say(currentSpeech) : ''}
-  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("I did not understand. Please say or press option 1, 2, or 3.")}
-  </Gather>
-  ${say("I did not hear anything. Goodbye.")}
-</Response>
-`.trim());
-    return;
-  }
-
-  const currentSlots = await findAvailableSlots(zip, currentStartOffset, 3);
-  const chosenSlot = currentSlots[selectedOption - 1];
+  const currentSlots = await findAvailableSlots(zip, currentStartOffset, 7);
+  const chosenSlot = detectSpokenSlotSelection(req, currentSlots);
 
   if (!chosenSlot) {
     const retryUrl = absoluteUrl(
       req,
       `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=${encodeURIComponent(currentStartOffset)}`
     );
-
     res.send(`
 <Response>
-  ${say("That option is not available.")}
-  <Gather input="speech dtmf" numDigits="1" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="8">
-    ${say("Please say or press option 1, 2, or 3.")}
+  ${currentSlots.length ? say(buildAvailabilitySpeech(currentSlots)) : ''}
+  <Gather input="speech dtmf" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("I did not understand. Please say the day, the date, or Friday or Saturday morning or afternoon.")}
   </Gather>
   ${say("I did not hear anything. Goodbye.")}
 </Response>
@@ -1695,7 +1760,7 @@ app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
 
   res.send(`
 <Response>
-  ${say(`Great. You selected ${chosenSlot.readableDate}, between ${chosenSlot.serviceWindow}.`)}
+  ${say(`Great. I have you for ${chosenSlot.readableDate}, from ${formatServiceWindowForSpeech(chosenSlot.serviceWindow)}.`)}
   ${pause(1)}
   <Gather input="speech" action="${xmlEscape(nameUrl)}" method="POST" speechTimeout="4" timeout="10">
     ${say("Can I get your first and last name, please?")}
