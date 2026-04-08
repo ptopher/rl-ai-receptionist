@@ -1430,6 +1430,7 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
 
   const results = [];
   const now = getEasternNow();
+  const seenDates = new Set();
 
   for (let offset = startOffsetDays; offset <= 30; offset += 1) {
     if (results.length >= maxSlots) {
@@ -1446,6 +1447,27 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
       continue;
     }
 
+    // For Fri/Sat, add both morning and afternoon slots if available
+    if ((dayName === 'Friday' || dayName === 'Saturday') && !seenDates.has(serviceDate)) {
+      const allowed = dayName === 'Friday' ? routingConfig.fridayAllowedCounties : routingConfig.saturdayAllowedCounties;
+      const matchedAllowed = matchingCounties.find(c => allowed.includes(c));
+      if (matchedAllowed) {
+        const dayJobs = getAppointmentJobsForDate(loadJobs(), serviceDate);
+        const morningFull = dayJobs.filter(j => j.serviceWindow === routingConfig.fridaySaturdayMorningWindow).length >= routingConfig.fridaySaturdayMorningMax;
+        const afternoonFull = dayJobs.filter(j => j.serviceWindow === routingConfig.fridaySaturdayAfternoonWindow).length >= routingConfig.fridaySaturdayAfternoonMax;
+        if (!morningFull) {
+          results.push({ serviceDate, serviceDay: dayName, serviceCounty: matchedAllowed, serviceWindow: routingConfig.fridaySaturdayMorningWindow, readableDate: getReadableDate(serviceDate) });
+        }
+        if (!afternoonFull) {
+          results.push({ serviceDate, serviceDay: dayName, serviceCounty: matchedAllowed, serviceWindow: routingConfig.fridaySaturdayAfternoonWindow, readableDate: getReadableDate(serviceDate) });
+        }
+        seenDates.add(serviceDate);
+      }
+      continue;
+    }
+
+    if (seenDates.has(serviceDate)) continue;
+
     const slot = await getSlotForDate(zip, serviceDate, dayName);
 
     if (slot) {
@@ -1453,6 +1475,7 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
         ...slot,
         readableDate: getReadableDate(slot.serviceDate)
       });
+      seenDates.add(serviceDate);
     }
   }
 
