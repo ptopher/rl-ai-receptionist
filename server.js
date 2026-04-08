@@ -67,13 +67,6 @@ async function getAIResponse(userInput) {
 const routingConfig = {
   homeZip: '20724',
 
-  mondayThroughThursdayPlan: {
-    Monday: "Prince George's",
-    Tuesday: "Howard",
-    Wednesday: "Anne Arundel",
-    Thursday: "Baltimore County"
-  },
-
   fridayAllowedCounties: ['Anne Arundel', 'Howard'],
   saturdayAllowedCounties: ['Howard', "Prince George's"],
 
@@ -1366,16 +1359,11 @@ async function getSlotForDate(zip, serviceDate, dayName) {
     dayName === 'Wednesday' ||
     dayName === 'Thursday'
   ) {
-    const targetCounty = routingConfig.mondayThroughThursdayPlan[dayName];
-    if (!matchingCounties.includes(targetCounty)) {
-      return null;
-    }
-
     if (dayJobs.length < routingConfig.mondayThursdayMax) {
       return {
         serviceDate,
         serviceDay: dayName,
-        serviceCounty: targetCounty,
+        serviceCounty: matchingCounties[0] || '',
         serviceWindow: routingConfig.mondayThursdayWindow
       };
     }
