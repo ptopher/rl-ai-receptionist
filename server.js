@@ -43,7 +43,8 @@ async function getAIResponse(userInput) {
     throw new Error(data.error?.message || 'OpenAI request failed');
   }
 
-  return data.output_text || 'Okay, tell me a little more about that.';
+  const aiText = (data.output && data.output[0] && data.output[0].content && data.output[0].content[0] && data.output[0].content[0].text) || data.output_text || '';
+  return aiText || 'Okay, tell me a little more about that.';
 }
 
 
@@ -577,7 +578,7 @@ async function extractEmailViaGPT(rawSpeechText) {
       return fallbackExtractEmail(raw);
     }
 
-    const gptResult = (data.output_text || '').trim().toLowerCase();
+    const gptResult = ((data.output && data.output[0] && data.output[0].content && data.output[0].content[0] && data.output[0].content[0].text) || data.output_text || '').trim().toLowerCase();
     console.log('GPT email extraction result:', gptResult, 'from raw:', raw);
 
     if (!gptResult || gptResult === 'none' || !gptResult.includes('@')) {
