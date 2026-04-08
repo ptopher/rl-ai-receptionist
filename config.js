@@ -160,7 +160,6 @@ Rules:
   },
 
   // ===== MACHINE DETECTION =====
-  // Each entry: { name: 'Display Name', keywords: [...words that trigger this machine...] }
   machineTypes: [
     {
       name: 'Riding mower',
@@ -185,7 +184,6 @@ Rules:
   ],
 
   // ===== ISSUE DETECTION =====
-  // Symptom keywords — if caller speech includes any of these, it counts as a real issue
   symptomKeywords: [
     'start', 'won t', 'wont', 'smoke', 'stall', 'surge',
     'leak', 'broken', 'blade', 'belt', 'carb', 'starter',
@@ -196,14 +194,12 @@ Rules:
     'string', 'deck', 'brake'
   ],
 
-  // Vague phrases — if speech includes these AND nothing else specific, reject as issue
   vagueIssuePhrases: [
     'work done', 'worked on', 'get it fix', 'need it fix',
     'need fix', 'need repair', 'need service', 'get service',
     'looked at', 'checked out'
   ],
 
-  // Machine-only words — used to detect if caller only said a machine name with no issue
   machineOnlyWords: [
     'lawnmower', 'lawn mower', 'mower', 'riding mower', 'lawn tractor',
     'tractor', 'generator', 'pressure washer', 'power washer',
