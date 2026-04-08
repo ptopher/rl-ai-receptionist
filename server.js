@@ -1469,6 +1469,25 @@ app.get('/test-ai', wrapRoute(async (req, res) => {
   res.status(200).type('text/plain').send(reply);
 }));
 
+app.get('/test-ai-debug', wrapRoute(async (req, res) => {
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'gpt-4.1-mini',
+      input: [
+        { role: 'system', content: 'Say hello.' },
+        { role: 'user', content: 'Hi' }
+      ]
+    })
+  });
+  const data = await response.json();
+  res.status(200).type('application/json').send(JSON.stringify(data, null, 2));
+}));
+
 app.get('/voice', wrapRoute((req, res) => {
   res.type('text/xml');
   res.send(buildVoiceTwiml(req));
