@@ -4,6 +4,8 @@ const WebSocket = require('ws');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const app = express();
 
+const config = require('./config');
+
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
@@ -11,25 +13,7 @@ const JOBS_FILE = 'jobs.json';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 
-const SYSTEM_PROMPT = `
-You are Emma, the phone assistant for RL Small Engines.
-
-Speak naturally and professionally.
-
-Rules:
-- RL Small Engines is a mobile service only. No drop-off.
-- Pricing depends on the problem. Do not quote exact prices.
-- Keep callbacks to a minimum.
-- Get the machine and issue clearly.
-- Get the ZIP code before discussing scheduling.
-- If outside the service area, politely say so and stop scheduling.
-- Only follow supported machine and brand rules.
-- If the customer rambles, politely redirect and ask one question at a time.
-- Do not over-diagnose.
-- Offer up to 3 real appointment choices when scheduling.
-- Never promise squeeze-ins or call-backs if something opens up.
-- Sound natural, not robotic.
-`;
+const SYSTEM_PROMPT = config.systemPrompt;
 
 async function getAIResponse(userInput) {
   const response = await fetch('https://api.openai.com/v1/responses', {
@@ -64,24 +48,11 @@ async function getAIResponse(userInput) {
 
 
 // ===== HOME / ROUTING SETTINGS =====
-const routingConfig = {
-  homeZip: '20724',
-
-  fridayAllowedCounties: ['Anne Arundel', 'Howard'],
-  saturdayAllowedCounties: ['Howard', "Prince George's"],
-
-  mondayThursdayWindow: '10:00 to 10:30',
-  fridaySaturdayMorningWindow: '10:00 to 12:00',
-  fridaySaturdayAfternoonWindow: '1:00 to 4:00',
-
-  mondayThursdayMax: 1,
-  fridaySaturdayMorningMax: 2,
-  fridaySaturdayAfternoonMax: 3
-};
+const routingConfig = config.routingConfig;
 
 // ===== EMAIL SETTINGS (Resend) =====
-const RESEND_API_KEY = process.env.RESEND_API_KEY || 're_LEfu6Sqh_3J3g6SadCX1gNMFVbmkxXxAe';
-const RESEND_FROM = process.env.RESEND_FROM || 'RL Small Engines <christopher@rlsmallengines.com>';
+const RESEND_API_KEY = config.resendApiKey;
+const RESEND_FROM = config.resendFrom;
 
 async function sendAppointmentConfirmationEmail({
   to,
@@ -94,20 +65,15 @@ async function sendAppointmentConfirmationEmail({
 }) {
   const readableDate = getReadableDate(serviceDate);
 
-  const htmlBody = `
-    <div style="font-family: Arial, sans-serif; color: #111111; line-height: 1.5;">
-      <p>Hello ${xmlEscape(name || 'Customer')},</p>
-      <p>Your appointment with <strong>RL Small Engines</strong> has been confirmed.</p>
-      <p>
-        <strong>Service:</strong> ${xmlEscape(machine || 'Unknown')}<br/>
-        <strong>Issue:</strong> ${xmlEscape(issue || 'Unknown')}<br/>
-        <strong>Date:</strong> ${xmlEscape(readableDate || '')}<br/>
-        <strong>Time Window:</strong> ${xmlEscape(serviceWindow || '')}<br/>
-        <strong>Address:</strong> ${xmlEscape(address || '')}
-      </p>
-      <p>Thank you,<br/>RL Small Engines</p>
-    </div>
-  `;
+  const htmlBody = config.buildConfirmationEmailHtml({
+    name,
+    machine,
+    issue,
+    readableDate,
+    serviceWindow,
+    address,
+    xmlEscape
+  });
 
   console.log('Attempting Resend email to:', to);
 
@@ -120,7 +86,7 @@ async function sendAppointmentConfirmationEmail({
     body: JSON.stringify({
       from: RESEND_FROM,
       to: [to],
-      subject: `RL Small Engines Appointment Confirmation - ${readableDate}`,
+      subject: config.buildConfirmationEmailSubject(readableDate),
       html: htmlBody
     })
   });
@@ -137,88 +103,12 @@ async function sendAppointmentConfirmationEmail({
 }
 
 // ===== COUNTY ZIP MAPS =====
-const countyZips = {
-  "Prince George's": [
-    '20707', '20705', '20708', '20783', '20742', '20771', '20769', '20706',
-    '20737', '20782', '20781', '20784', '20720', '20715', '20721', '20716',
-    '20785', '20743', '20747', '20746', '20774', '20748', '20745', '20735',
-    '20772', '20623', '20744', '20607', '20613'
-  ],
-  "Howard": [
-    '20701', '21029', '21044', '21045', '21046', '21075', '20759',
-    '21076', '20777', '20794', '20723', '21042', '21043'
-  ],
-  "Anne Arundel": [
-    '21401', '21402', '21403', '21012', '21114', '21032', '21035',
-    '21037', '21054', '21060', '21061', '21076', '21077', '20776',
-    '20794', '20724', '21090', '21108', '21113', '21122', '21140',
-    '21144', '21146'
-  ],
-  "Baltimore County": [
-    '21228', '21043', '21227', '21208', '21133', '21136', '21244', '21163'
-  ]
-};
+const countyZips = config.countyZips;
 
 // ===== LOCAL CORRECTION LAYER =====
-const exactPhraseCorrections = [
-  ['bevern', 'severn'],
-  ['saverne', 'severn'],
-  ['savern', 'severn'],
-  ['saverne maryland', 'severn maryland'],
-  ['savern maryland', 'severn maryland'],
-  ['seven maryland', 'severn maryland'],
-  ['7 maryland', 'severn maryland'],
-  ['severn marylin', 'severn maryland'],
-  ['stubborn maryland', 'severn maryland'],
-  ['stubbern maryland', 'severn maryland'],
-  ['odenton marylin', 'odenton maryland'],
-  ['glen bernie', 'glen burnie'],
-  ['glen berny', 'glen burnie'],
-  ['glenn burnie', 'glen burnie'],
-  ['bowy', 'bowie'],
-  ['booie', 'bowie'],
-  ['bui', 'bowie'],
-  ['lanhamm', 'lanham'],
-  ['lanem', 'lanham'],
-  ['croftonn', 'crofton'],
-  ['millersvile', 'millersville'],
-  ['pasadenaa', 'pasadena'],
-  ['gambrillss', 'gambrills'],
-  ['laurel marylin', 'laurel maryland'],
-  ['bel air road', 'belair road'],
-  ['belair rd', 'belair road'],
-  ['ain arundel', 'anne arundel'],
-  ['anne arundele', 'anne arundel'],
-  ['lawn tractor', 'riding mower'],
-  ['ride on mower', 'riding mower'],
-  ['rider mower', 'riding mower'],
-  ['push mower', 'lawnmower'],
-  ['pressure washing machine', 'pressure washer'],
-  ['snow blower', 'snowblower']
-];
+const exactPhraseCorrections = config.exactPhraseCorrections;
 
-const wordCorrections = {
-  bevern: 'severn',
-  saverne: 'severn',
-  savern: 'severn',
-  sevenn: 'severn',
-  severnn: 'severn',
-  stubborn: 'severn',
-  stubbern: 'severn',
-  glenn: 'glen',
-  bernie: 'burnie',
-  berny: 'burnie',
-  bowy: 'bowie',
-  booie: 'bowie',
-  lanem: 'lanham',
-  lanhamm: 'lanham',
-  croftonn: 'crofton',
-  millersvile: 'millersville',
-  pasadenaa: 'pasadena',
-  gambrillss: 'gambrills',
-  arundele: 'arundel',
-  marylin: 'maryland'
-};
+const wordCorrections = config.wordCorrections;
 
 // ===== HELPERS =====
 function cleanText(text) {
@@ -330,7 +220,7 @@ function normalizeAddressText(address) {
   let corrected = applyLocalCorrections(address);
 
   corrected = corrected
-    .replace(/[?!"“”]/g, ' ')
+    .replace(/[?!"""]/g, ' ')
     .replace(/[;:]/g, ' ')
     .replace(/\s*,\s*/g, ' ')
     .replace(/\s*\.\s*/g, ' ')
@@ -644,6 +534,84 @@ function extractEmailFromSpeech(req) {
   }
 
   const rawCleaned = sanitizeLooseEmail(normalizeEmailSpeech(raw));
+  if (isStrictEmail(rawCleaned) || isAcceptableEmail(rawCleaned)) {
+    return rawCleaned;
+  }
+
+  return rawCleaned;
+}
+
+// ===== GPT EMAIL EXTRACTION =====
+// Sends raw spoken text to GPT to extract an email address.
+// Falls back to the existing regex pipeline if GPT fails or returns nothing.
+async function extractEmailViaGPT(rawSpeechText) {
+  const raw = String(rawSpeechText || '').trim();
+  if (!raw) return '';
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4.1-mini',
+        input: [
+          {
+            role: 'system',
+            content: 'You are an email extraction assistant. The user will give you a transcript of someone speaking their email address out loud. Extract the email address from what they said. Reply with ONLY the email address, nothing else. No quotes, no explanation. If you cannot determine an email address, reply with the single word NONE.'
+          },
+          {
+            role: 'user',
+            content: raw
+          }
+        ]
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error('GPT email extraction API error:', data.error?.message);
+      return fallbackExtractEmail(raw);
+    }
+
+    const gptResult = (data.output_text || '').trim().toLowerCase();
+    console.log('GPT email extraction result:', gptResult, 'from raw:', raw);
+
+    if (!gptResult || gptResult === 'none' || !gptResult.includes('@')) {
+      return fallbackExtractEmail(raw);
+    }
+
+    // Sanitize GPT result
+    const sanitized = sanitizeLooseEmail(gptResult);
+    if (isStrictEmail(sanitized) || isAcceptableEmail(sanitized)) {
+      return sanitized;
+    }
+
+    return fallbackExtractEmail(raw);
+  } catch (err) {
+    console.error('GPT email extraction error:', err);
+    return fallbackExtractEmail(raw);
+  }
+}
+
+// The existing regex pipeline as a fallback
+function fallbackExtractEmail(rawText) {
+  let email = normalizeEmailSpeech(rawText);
+
+  if (isStrictEmail(email) || isAcceptableEmail(email)) {
+    return email;
+  }
+
+  email = sanitizeLooseEmail(email);
+
+  if (isStrictEmail(email) || isAcceptableEmail(email)) {
+    return email;
+  }
+
+  const rawCleaned = sanitizeLooseEmail(normalizeEmailSpeech(rawText));
   if (isStrictEmail(rawCleaned) || isAcceptableEmail(rawCleaned)) {
     return rawCleaned;
   }
@@ -1199,43 +1167,16 @@ async function getDistanceFromHomeMiles(zip) {
 function detectMachine(input) {
   const cleaned = cleanText(applyLocalCorrections(input));
 
-  if (
-    cleaned.includes('riding') ||
-    cleaned.includes('tractor') ||
-    cleaned.includes('riding mower') ||
-    cleaned.includes('lawn tractor') ||
-    cleaned.includes('ride mower') ||
-    cleaned.includes('rider')
-  ) {
-    return 'Riding mower';
-  }
-
-  if (
-    cleaned.includes('lawn mower') ||
-    cleaned === 'mower' ||
-    cleaned.includes('push mower') ||
-    cleaned.includes('lawnmower')
-  ) {
-    return 'Lawnmower';
-  }
-
-  if (cleaned.includes('generator') || cleaned === 'gen') {
-    return 'Generator';
-  }
-
-  if (
-    cleaned.includes('pressure washer') ||
-    cleaned.includes('power washer')
-  ) {
-    return 'Pressure washer';
-  }
-
-  if (
-    cleaned.includes('snow blower') ||
-    cleaned.includes('snowblower') ||
-    cleaned.includes('snow thrower')
-  ) {
-    return 'Snowblower';
+  for (const machineType of config.machineTypes) {
+    for (const keyword of machineType.keywords) {
+      if (keyword.includes(' ')) {
+        // Multi-word keyword — check includes
+        if (cleaned.includes(keyword)) return machineType.name;
+      } else {
+        // Single-word keyword — check includes (matches original behavior)
+        if (cleaned.includes(keyword)) return machineType.name;
+      }
+    }
   }
 
   return null;
@@ -1491,7 +1432,7 @@ function buildVoiceTwiml(req) {
   <Connect>
     <ConversationRelay
       url="${xmlEscape(wsUrl)}"
-      welcomeGreeting="Thanks for calling RL Small Engines. What can I help you with today?"
+      welcomeGreeting="${xmlEscape(config.welcomeGreeting)}"
     />
   </Connect>
 </Response>
@@ -1500,12 +1441,12 @@ function buildVoiceTwiml(req) {
 
 
 app.get('/', (req, res) => {
-  res.send('RL AI Receptionist is running');
+  res.send(config.homepageText);
 });
 
 // ===== TEST EMAIL ROUTE =====
 app.get('/test-email', wrapRoute(async (req, res) => {
-  const to = req.query.to || 'christopher@rlsmallengines.com';
+  const to = req.query.to || config.testEmailTo;
 
   try {
     const result = await sendAppointmentConfirmationEmail({
@@ -1515,7 +1456,7 @@ app.get('/test-email', wrapRoute(async (req, res) => {
       issue: 'Test email check',
       serviceDate: formatEasternDateKey(getEasternNow()),
       serviceWindow: '10:00 to 12:00',
-      address: '1748 Old Georgetown Court Severn Maryland 21144'
+      address: config.testAddress
     });
     res.status(200).type('text/plain').send('EMAIL SENT TO: ' + to + ' id: ' + result.id);
   } catch (error) {
@@ -2269,8 +2210,8 @@ app.post('/correctAppointmentIssue', wrapRoute((req, res) => {
   );
 }));
 
-// ===== EMAIL CAPTURE FOR APPOINTMENTS =====
-app.post('/getEmailForAppointment', wrapRoute((req, res) => {
+// ===== EMAIL CAPTURE FOR APPOINTMENTS (GPT-routed) =====
+app.post('/getEmailForAppointment', wrapRoute(async (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -2281,7 +2222,8 @@ app.post('/getEmailForAppointment', wrapRoute((req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
   const address = req.query.address || '';
-  const email = extractEmailFromSpeech(req);
+  const rawSpeech = String(req.body.SpeechResult || '').trim();
+  const email = await extractEmailViaGPT(rawSpeech);
 
   const sameUrl = absoluteUrl(
     req,
@@ -3120,7 +3062,7 @@ wss.on('connection', (ws, req) => {
 
           // --- Issue ---
           if (!callState.issue) {
-            const machineWords = ['lawnmower','lawn mower','mower','riding mower','lawn tractor','tractor','generator','pressure washer','power washer','snowblower','snow blower'];
+            const machineWords = config.machineOnlyWords;
             const isMachineOnly = machineWords.includes(cleaned) || cleaned === cleanText(callState.machine);
             const possibleZip = normalizeSpokenDigits(userText).slice(0,5);
             if (!isMachineOnly && possibleZip.length !== 5) {
@@ -3128,30 +3070,10 @@ wss.on('connection', (ws, req) => {
               // "I need it fixed" or "repaired" alone is NOT enough - need a symptom
               // Only capture issue if caller described an actual symptom
               // Vague phrases like "work done", "get it fixed", "need service" are NOT enough
-              const hasSymptom = (
-                cleaned.includes('start') || cleaned.includes('won t') || cleaned.includes('wont') ||
-                cleaned.includes('smoke') || cleaned.includes('stall') || cleaned.includes('surge') ||
-                cleaned.includes('leak') || cleaned.includes('broken') || cleaned.includes('blade') ||
-                cleaned.includes('belt') || cleaned.includes('carb') || cleaned.includes('starter') ||
-                cleaned.includes('tune') || cleaned.includes('oil') || cleaned.includes('pull') ||
-                cleaned.includes('dead') || cleaned.includes('flat') || cleaned.includes('tire') ||
-                cleaned.includes('battery') || cleaned.includes('cut') || cleaned.includes('clog') ||
-                cleaned.includes('overheat') || cleaned.includes('backfire') || cleaned.includes('spark') ||
-                cleaned.includes('shut off') || cleaned.includes('click') || cleaned.includes('noise') ||
-                cleaned.includes('vibrat') || cleaned.includes('fuel') || cleaned.includes('choke') ||
-                cleaned.includes('flood') || cleaned.includes('not running') || cleaned.includes('dies') ||
-                cleaned.includes('sputt') || cleaned.includes('rpm') || cleaned.includes('throttle') ||
-                cleaned.includes('string') || cleaned.includes('deck') || cleaned.includes('brake')
-              );
+              const hasSymptom = config.symptomKeywords.some(kw => cleaned.includes(kw));
 
-              const vaguePhrase = (
-                cleaned.includes('work done') || cleaned.includes('worked on') ||
-                cleaned.includes('get it fix') || cleaned.includes('need it fix') ||
-                cleaned.includes('need fix') || cleaned.includes('need repair') ||
-                cleaned.includes('need service') || cleaned.includes('get service') ||
-                cleaned.includes('looked at') || cleaned.includes('checked out') ||
-                cleaned.includes('tune up') && cleaned.split(' ').length <= 3
-              );
+              const vaguePhrase = config.vagueIssuePhrases.some(vp => cleaned.includes(vp)) ||
+                (cleaned.includes('tune up') && cleaned.split(' ').length <= 3);
 
               if (hasSymptom && !vaguePhrase) {
                 callState.issue = userText.trim();
@@ -3317,9 +3239,9 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
-          // --- Email ---
+          // --- Email (GPT-routed) ---
           if (callState.addressConfirmed && !callState.email) {
-            const rawEmail = sanitizeLooseEmail(normalizeEmailSpeech(userText));
+            const rawEmail = await extractEmailViaGPT(userText);
             if (rawEmail && rawEmail.includes('@')) {
               callState.email = rawEmail;
               ws.send(JSON.stringify({ type: 'text', token: `I have ${formatEmailForSpeech(rawEmail)}. Is that correct?`, last: true }));
