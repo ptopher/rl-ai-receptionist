@@ -3175,21 +3175,12 @@ wss.on('connection', (ws, req) => {
             if (wants) {
               callState.askedForSchedule = false;
               callState.inScheduling = true;
-              const slots = await findAvailableSlots(callState.zip, 1, 3);
+              const slots = await findAvailableSlots(callState.zip, 1, 7);
               callState.offeredSlots = slots;
               if (!slots.length) {
                 reply = 'Sorry, there are no available appointments right now. Please call back soon.';
               } else {
-                reply = 'Here are our next available appointments. ';
-                slots.forEach((slot, i) => {
-                  let win;
-                  if (slot.serviceWindow === '10:00 to 10:30') win = 'between ten and ten thirty in the morning';
-                  else if (slot.serviceWindow === '10:00 to 12:00') win = 'morning between ten and noon';
-                  else if (slot.serviceWindow === '1:00 to 4:00') win = 'afternoon between one and four';
-                  else win = slot.serviceWindow;
-                  reply += `Option ${i+1}, ${slot.readableDate}, ${win}. `;
-                });
-                reply += 'Which option works best for you?';
+                reply = buildAvailabilitySpeech(slots);
               }
             } else {
               callState.askedForSchedule = false;
@@ -3202,15 +3193,18 @@ wss.on('connection', (ws, req) => {
           // --- Day/slot selection ---
           if (callState.inScheduling && !callState.dayConfirmed) {
             let matchedSlot = null;
-            const nt = cleaned.replace(/[^a-z0-9 ]/g, '').trim();
-            const digits = nt.replace(/[^0-9]/g, '');
-            if (nt === 'option 1' || digits === '1' || nt === 'one' || nt === 'first') matchedSlot = callState.offeredSlots[0];
-            else if (nt === 'option 2' || digits === '2' || nt === 'two' || nt === 'second') matchedSlot = callState.offeredSlots[1];
-            else if (nt === 'option 3' || digits === '3' || nt === 'three' || nt === 'third') matchedSlot = callState.offeredSlots[2];
-            if (!matchedSlot) {
-              const days = ['monday','tuesday','wednesday','thursday','friday','saturday'];
-              const foundDay = days.find(d => nt === d || nt.startsWith(d));
-              if (foundDay) matchedSlot = callState.offeredSlots.find(s => s.serviceDay.toLowerCase() === foundDay);
+            const speech = userText.toLowerCase();
+            for (const slot of callState.offeredSlots) {
+              const day = slot.serviceDay.toLowerCase();
+              const slotDate = new Date(`${slot.serviceDate}T12:00:00`);
+              const month = slotDate.toLocaleDateString('en-US', { month: 'long' }).toLowerCase();
+              const dayNum = String(slotDate.getDate());
+              const isMorning = slot.serviceWindow === '10:00 to 12:00';
+              const isAfternoon = slot.serviceWindow === '1:00 to 4:00';
+              if (speech.includes(day) && slot.serviceWindow === '10:00 to 10:30') { matchedSlot = slot; break; }
+              if (speech.includes(day) && isMorning && speech.includes('morning')) { matchedSlot = slot; break; }
+              if (speech.includes(day) && isAfternoon && speech.includes('afternoon')) { matchedSlot = slot; break; }
+              if (speech.includes(month) && speech.includes(dayNum)) { matchedSlot = slot; break; }
             }
             if (matchedSlot) {
               callState.selectedDay = matchedSlot.serviceDay;
@@ -3225,7 +3219,7 @@ wss.on('connection', (ws, req) => {
               ws.send(JSON.stringify({ type: 'text', token: `Got it, ${matchedSlot.readableDate}, ${win}. Does that sound right?`, last: true }));
               break;
             }
-            ws.send(JSON.stringify({ type: 'text', token: 'Please say option one, two, or three.', last: true }));
+            ws.send(JSON.stringify({ type: 'text', token: 'Please say the day, the date, or Friday or Saturday morning or afternoon.', last: true }));
             break;
           }
 
