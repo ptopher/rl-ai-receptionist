@@ -673,16 +673,31 @@ function fallbackExtractEmail(rawText) {
 }
 
 function formatEmailForSpeech(email) {
-  return String(email || '')
-    .replace(/[._+\-]+$/, '')
-    .replace(/@/g, ' at ')
+  const clean = String(email || '').replace(/[._+\-]+$/, '').trim();
+  if (!clean || !clean.includes('@')) return clean;
+
+  const [local, domain] = clean.split('@');
+
+  // Spell out the local part letter by letter for clarity
+  const spellOut = (str) => {
+    return str.split('').map(ch => {
+      if (/[a-z]/i.test(ch)) return ch.toUpperCase();
+      if (/\d/.test(ch)) return ch;
+      if (ch === '.') return 'dot';
+      if (ch === '_') return 'underscore';
+      if (ch === '-') return 'dash';
+      if (ch === '+') return 'plus';
+      return ch;
+    }).join(', ');
+  };
+
+  // Domain stays readable (gmail dot com, not G M A I L dot com)
+  const domainSpoken = domain
     .replace(/\./g, ' dot ')
-    .replace(/_/g, ' underscore ')
-    .replace(/-/g, ' dash ')
-    .replace(/\+/g, ' plus ')
-    .replace(/\d+/g, (n) => n.split('').join(' '))
     .replace(/\s+/g, ' ')
     .trim();
+
+  return `${spellOut(local)}, at, ${domainSpoken}`;
 }
 
 function loadJobs() {
@@ -1486,6 +1501,12 @@ function buildVoiceTwiml(req) {
     <ConversationRelay
       url="${xmlEscape(wsUrl)}"
       welcomeGreeting="${xmlEscape(config.welcomeGreeting)}"
+      interruptible="false"
+      interruptByDtmf="false"
+      speechModel="phone_call"
+      transcriptionProvider="google"
+      voice="Google.en-US-Journey-F"
+      dtmfDetection="true"
     />
   </Connect>
 </Response>
@@ -3199,6 +3220,8 @@ wss.on('connection', (ws, req) => {
           if (callState.inScheduling && !callState.dayConfirmed) {
             let matchedSlot = null;
             const speech = userText.toLowerCase();
+            const isMorningSpeech = speech.includes('morning') || speech.includes('am') || speech.includes('a.m');
+            const isAfternoonSpeech = speech.includes('afternoon') || speech.includes('pm') || speech.includes('p.m') || speech.includes('after');
             for (const slot of callState.offeredSlots) {
               const day = slot.serviceDay.toLowerCase();
               const slotDate = new Date(`${slot.serviceDate}T12:00:00`);
@@ -3207,9 +3230,20 @@ wss.on('connection', (ws, req) => {
               const isMorning = slot.serviceWindow === '10:00 to 12:00';
               const isAfternoon = slot.serviceWindow === '1:00 to 4:00';
               if (speech.includes(day) && slot.serviceWindow === '10:00 to 10:30') { matchedSlot = slot; break; }
-              if (speech.includes(day) && isMorning && speech.includes('morning')) { matchedSlot = slot; break; }
-              if (speech.includes(day) && isAfternoon && speech.includes('afternoon')) { matchedSlot = slot; break; }
+              if (speech.includes(day) && isMorning && isMorningSpeech) { matchedSlot = slot; break; }
+              if (speech.includes(day) && isAfternoon && isAfternoonSpeech) { matchedSlot = slot; break; }
               if (speech.includes(month) && speech.includes(dayNum)) { matchedSlot = slot; break; }
+            }
+            // If caller said just "Friday" or "Saturday" with no morning/afternoon qualifier
+            if (!matchedSlot && !isMorningSpeech && !isAfternoonSpeech) {
+              const daySlots = callState.offeredSlots.filter(s => speech.includes(s.serviceDay.toLowerCase()));
+              if (daySlots.length === 1) {
+                matchedSlot = daySlots[0];
+              } else if (daySlots.length > 1) {
+                const dayName = daySlots[0].serviceDay;
+                ws.send(JSON.stringify({ type: 'text', token: `Would you like ${dayName} morning or afternoon?`, last: true }));
+                break;
+              }
             }
             if (matchedSlot) {
               callState.selectedDay = matchedSlot.serviceDay;
