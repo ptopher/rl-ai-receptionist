@@ -545,9 +545,11 @@ function extractEmailFromSpeech(req) {
 // ===== GPT EMAIL EXTRACTION =====
 // Sends raw spoken text to GPT to extract an email address.
 // Falls back to the existing regex pipeline if GPT fails or returns nothing.
-async function extractEmailViaGPT(rawSpeechText) {
+async function extractEmailViaGPT(rawSpeechText, callerName) {
   const raw = String(rawSpeechText || '').trim();
   if (!raw) return '';
+
+  const nameHint = callerName ? ` The caller's name is "${callerName}" — the email local part may contain their name or a variation of it (nicknames, abbreviations, with or without numbers). Use this as a hint when the transcription is ambiguous, especially for tricky letters like P/B/T/D.` : '';
 
   try {
     const response = await fetch('https://api.openai.com/v1/responses', {
@@ -561,7 +563,7 @@ async function extractEmailViaGPT(rawSpeechText) {
         input: [
           {
             role: 'system',
-            content: 'You are an email extraction assistant. The user will give you a transcript of someone speaking their email address out loud. Extract the email address from what they said. Reply with ONLY the email address, nothing else. No quotes, no explanation. If you cannot determine an email address, reply with the single word NONE.'
+            content: 'You are an email extraction assistant. The user will give you a transcript of someone speaking their email address out loud over the phone. Speech-to-text often confuses similar-sounding letters like P/B/T/D, M/N, S/F, and vowels. Extract the most likely email address from what they said. Reply with ONLY the email address, nothing else. No quotes, no explanation. If you cannot determine an email address, reply with the single word NONE.' + nameHint
           },
           {
             role: 'user',
@@ -2243,7 +2245,7 @@ app.post('/getEmailForAppointment', wrapRoute(async (req, res) => {
   const phone = req.query.phone || '';
   const address = req.query.address || '';
   const rawSpeech = String(req.body.SpeechResult || '').trim();
-  const email = await extractEmailViaGPT(rawSpeech);
+  const email = await extractEmailViaGPT(rawSpeech, name);
 
   const sameUrl = absoluteUrl(
     req,
@@ -3261,7 +3263,7 @@ wss.on('connection', (ws, req) => {
 
           // --- Email (GPT-routed) ---
           if (callState.addressConfirmed && !callState.email) {
-            const rawEmail = await extractEmailViaGPT(userText);
+            const rawEmail = await extractEmailViaGPT(userText, callState.callerName);
             if (rawEmail && rawEmail.includes('@')) {
               callState.email = rawEmail;
               ws.send(JSON.stringify({ type: 'text', token: `I have ${formatEmailForSpeech(rawEmail)}. Is that correct?`, last: true }));
