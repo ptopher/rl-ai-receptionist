@@ -1442,10 +1442,6 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
   const seenDates = new Set();
 
   for (let offset = startOffsetDays; offset <= 30; offset += 1) {
-    if (results.length >= maxSlots) {
-      break;
-    }
-
     const future = new Date(now);
     future.setDate(now.getDate() + offset);
 
@@ -1457,6 +1453,7 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
     }
 
     // For Fri/Sat, add both morning and afternoon slots if available
+    // Always allow Fri/Sat to be added even if we've hit maxSlots for Mon-Thu
     if ((dayName === 'Friday' || dayName === 'Saturday') && !seenDates.has(serviceDate)) {
       const allowed = dayName === 'Friday' ? routingConfig.fridayAllowedCounties : routingConfig.saturdayAllowedCounties;
       const matchedAllowed = matchingCounties.find(c => allowed.includes(c));
@@ -1472,6 +1469,11 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
         }
         seenDates.add(serviceDate);
       }
+      continue;
+    }
+
+    // For Mon-Thu, respect maxSlots cap
+    if (results.length >= maxSlots) {
       continue;
     }
 
