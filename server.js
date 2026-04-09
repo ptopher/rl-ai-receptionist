@@ -15,6 +15,10 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 
 const SYSTEM_PROMPT = config.systemPrompt;
 
+function parseGPTResponseText(data) {
+  return (data.output && data.output[0] && data.output[0].content && data.output[0].content[0] && data.output[0].content[0].text) || data.output_text || '';
+}
+
 async function getAIResponse(userInput) {
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
@@ -43,7 +47,7 @@ async function getAIResponse(userInput) {
     throw new Error(data.error?.message || 'OpenAI request failed');
   }
 
-  const aiText = (data.output && data.output[0] && data.output[0].content && data.output[0].content[0] && data.output[0].content[0].text) || data.output_text || '';
+  const aiText = parseGPTResponseText(data);
   return aiText || 'Okay, tell me a little more about that.';
 }
 
@@ -544,13 +548,19 @@ function extractEmailFromSpeech(req) {
 
 // ===== GPT EMAIL EXTRACTION =====
 // Sends raw spoken text to GPT to extract an email address.
-// Falls back to the existing regex pipeline if GPT fails or returns nothing.
+// Runs both regex and GPT pipelines, uses GPT tiebreaker if they differ.
 async function extractEmailViaGPT(rawSpeechText, callerName) {
   const raw = String(rawSpeechText || '').trim();
   if (!raw) return '';
 
+  // Step 1: Run the regex pipeline
+  const regexResult = fallbackExtractEmail(raw);
+  console.log('Email regex pipeline result:', regexResult, 'from raw:', raw);
+
+  // Step 2: Run GPT extraction
   const nameHint = callerName ? ` The caller's name is "${callerName}" — the email local part may contain their name or a variation of it (nicknames, abbreviations, with or without numbers). Use this as a hint when the transcription is ambiguous, especially for tricky letters like P/B/T/D.` : '';
 
+  let gptDirect = '';
   try {
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
@@ -563,7 +573,7 @@ async function extractEmailViaGPT(rawSpeechText, callerName) {
         input: [
           {
             role: 'system',
-            content: 'You are an email extraction assistant. The user will give you a transcript of someone speaking their email address out loud over the phone. Speech-to-text often confuses similar-sounding letters like P/B/T/D, M/N, S/F, and vowels. Extract the most likely email address from what they said. Reply with ONLY the email address, nothing else. No quotes, no explanation. If you cannot determine an email address, reply with the single word NONE.' + nameHint
+            content: 'You are an email extraction assistant. The user will give you a transcript of someone speaking or spelling their email address out loud over the phone. Speech-to-text often confuses similar-sounding letters like P/B/T/D, M/N, S/F, and vowels. If the person is spelling letter by letter, treat each word as an individual letter (e.g. "pee" = P, "tee" = T, "oh" = O, "aitch" = H, "ee" = E, "ar" = R). Extract the most likely email address from what they said. Reply with ONLY the email address, nothing else. No quotes, no explanation. If you cannot determine an email address, reply with the single word NONE.' + nameHint
           },
           {
             role: 'user',
@@ -575,29 +585,69 @@ async function extractEmailViaGPT(rawSpeechText, callerName) {
 
     const data = await response.json();
 
-    if (!response.ok) {
+    if (response.ok) {
+      const parsed = parseGPTResponseText(data).trim().toLowerCase();
+      if (parsed && parsed !== 'none' && parsed.includes('@')) {
+        const sanitized = sanitizeLooseEmail(parsed);
+        if (isStrictEmail(sanitized) || isAcceptableEmail(sanitized)) {
+          gptDirect = sanitized;
+        }
+      }
+    } else {
       console.error('GPT email extraction API error:', data.error?.message);
-      return fallbackExtractEmail(raw);
     }
-
-    const gptResult = ((data.output && data.output[0] && data.output[0].content && data.output[0].content[0] && data.output[0].content[0].text) || data.output_text || '').trim().toLowerCase();
-    console.log('GPT email extraction result:', gptResult, 'from raw:', raw);
-
-    if (!gptResult || gptResult === 'none' || !gptResult.includes('@')) {
-      return fallbackExtractEmail(raw);
-    }
-
-    // Sanitize GPT result
-    const sanitized = sanitizeLooseEmail(gptResult);
-    if (isStrictEmail(sanitized) || isAcceptableEmail(sanitized)) {
-      return sanitized;
-    }
-
-    return fallbackExtractEmail(raw);
   } catch (err) {
     console.error('GPT email extraction error:', err);
-    return fallbackExtractEmail(raw);
   }
+
+  console.log('Email GPT direct result:', gptDirect);
+
+  // Step 3: If both agree or only one produced a result, use what we have
+  if (!gptDirect && !regexResult) return '';
+  if (!gptDirect) return regexResult;
+  if (!regexResult) return gptDirect;
+  if (gptDirect === regexResult) return gptDirect;
+
+  // Step 4: They differ — ask GPT to pick the best one
+  console.log('Email candidates differ — regex:', regexResult, 'gpt:', gptDirect, '— running tiebreaker');
+  try {
+    const tbResponse = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4.1-mini',
+        input: [
+          {
+            role: 'system',
+            content: 'You are an email validation assistant. The user will give you the raw phone transcript of someone saying their email address, plus two candidate email addresses extracted by different methods. Pick the one that is most likely the correct email address. Consider common speech-to-text errors (P/B/T/D swaps, dropped letters, number confusion). If one candidate looks like a real name or word pattern and the other looks garbled, prefer the real-looking one.' + nameHint + ' Reply with ONLY the winning email address. No explanation.'
+          },
+          {
+            role: 'user',
+            content: `Raw transcript: "${raw}"\nCandidate A (letter-by-letter): ${regexResult}\nCandidate B (AI extraction): ${gptDirect}`
+          }
+        ]
+      })
+    });
+
+    const tbData = await tbResponse.json();
+
+    if (tbResponse.ok) {
+      const winner = parseGPTResponseText(tbData).trim().toLowerCase();
+      console.log('Email tiebreaker picked:', winner);
+      const sanitizedWinner = sanitizeLooseEmail(winner);
+      if (isStrictEmail(sanitizedWinner) || isAcceptableEmail(sanitizedWinner)) {
+        return sanitizedWinner;
+      }
+    }
+  } catch (err) {
+    console.error('Email tiebreaker error:', err);
+  }
+
+  // If tiebreaker failed, prefer regex result for spelled-out emails
+  return regexResult;
 }
 
 // The existing regex pipeline as a fallback
