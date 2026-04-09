@@ -191,13 +191,13 @@ Rules:
     'battery', 'cut', 'clog', 'overheat', 'backfire', 'spark',
     'shut off', 'click', 'noise', 'vibrat', 'fuel', 'choke',
     'flood', 'not running', 'dies', 'sputt', 'rpm', 'throttle',
-    'string', 'deck', 'brake'
+    'string', 'deck', 'brake', 'fix', 'repair', 'won t work',
+    'not work', 'doesn t work', 'doesnt work', 'won t run',
+    'needs fix', 'needs repair', 'needs work'
   ],
 
   vagueIssuePhrases: [
-    'work done', 'worked on', 'get it fix', 'need it fix',
-    'need fix', 'need repair', 'need service', 'get service',
-    'looked at', 'checked out'
+    'work done', 'worked on', 'looked at', 'checked out'
   ],
 
   machineOnlyWords: [
