@@ -1502,11 +1502,6 @@ function buildVoiceTwiml(req) {
       url="${xmlEscape(wsUrl)}"
       welcomeGreeting="${xmlEscape(config.welcomeGreeting)}"
       interruptible="false"
-      interruptByDtmf="false"
-      speechModel="phone_call"
-      transcriptionProvider="google"
-      voice="Google.en-US-Journey-F"
-      dtmfDetection="true"
     />
   </Connect>
 </Response>
