@@ -1442,6 +1442,10 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
   const seenDates = new Set();
 
   for (let offset = startOffsetDays; offset <= 30; offset += 1) {
+    if (results.length >= maxSlots) {
+      break;
+    }
+
     const future = new Date(now);
     future.setDate(now.getDate() + offset);
 
@@ -1453,7 +1457,6 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
     }
 
     // For Fri/Sat, add both morning and afternoon slots if available
-    // Always allow Fri/Sat to be added even if we've hit maxSlots for Mon-Thu
     if ((dayName === 'Friday' || dayName === 'Saturday') && !seenDates.has(serviceDate)) {
       const allowed = dayName === 'Friday' ? routingConfig.fridayAllowedCounties : routingConfig.saturdayAllowedCounties;
       const matchedAllowed = matchingCounties.find(c => allowed.includes(c));
@@ -1469,11 +1472,6 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
         }
         seenDates.add(serviceDate);
       }
-      continue;
-    }
-
-    // For Mon-Thu, respect maxSlots cap
-    if (results.length >= maxSlots) {
       continue;
     }
 
@@ -3099,7 +3097,8 @@ wss.on('connection', (ws, req) => {
     offeredSlots: [], selectedSlot: null, selectedDay: null, dayConfirmed: false,
     timeWindow: '', serviceDate: '', callerName: '', phone: null,
     phoneConfirmed: false, address: null, addressConfirmed: false,
-    email: null, emailConfirmed: false, booked: false
+    email: null, emailConfirmed: false, booked: false,
+    askedLastStarted: false, lastStartedAnswer: '', issueNeedsLastStarted: false
   };
 
   ws.on('message', async (message) => {
@@ -3116,6 +3115,16 @@ wss.on('connection', (ws, req) => {
           console.log('Caller said:', userText);
           let reply = '';
 
+          const isNoStartIssue =
+            cleaned.includes('not starting') ||
+            cleaned.includes('won t start') ||
+            cleaned.includes('wont start') ||
+            cleaned.includes('won t crank') ||
+            cleaned.includes('wont crank') ||
+            cleaned.includes('no start') ||
+            cleaned.includes('doesn t start') ||
+            cleaned.includes('doesnt start');
+
           // --- ZIP confirmation ---
           if (callState.awaitingZipConfirmation) {
             const dec = detectYesNoText(userText);
@@ -3124,10 +3133,15 @@ wss.on('connection', (ws, req) => {
               callState.zipConfirmed = true;
               const counties = getCountyForZip(callState.zip);
               if (!counties.length) {
-                reply = `Sorry, we do not service zip code ${callState.zip}.`;
+                reply = `Sorry, we do not service zip code ${callState.zip}. Please call back if you need anything else.`;
               } else {
-                reply = `Great, we do service that area. Would you like to schedule an appointment?`;
-                callState.askedForSchedule = true;
+                const slots = await findAvailableSlots(callState.zip, 1, 7);
+                callState.offeredSlots = slots;
+                if (!slots.length) {
+                  reply = 'We service that area, but there are no available appointments right now. Please call back soon.';
+                } else {
+                  reply = `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`;
+                }
               }
             } else if (dec === 'no') {
               callState.awaitingZipConfirmation = false;
@@ -3156,17 +3170,16 @@ wss.on('connection', (ws, req) => {
             const isMachineOnly = machineWords.includes(cleaned) || cleaned === cleanText(callState.machine);
             const possibleZip = normalizeSpokenDigits(userText).slice(0,5);
             if (!isMachineOnly && possibleZip.length !== 5) {
-              // Only capture issue if caller described an actual symptom or problem
-              // "I need it fixed" or "repaired" alone is NOT enough - need a symptom
-              // Only capture issue if caller described an actual symptom
-              // Vague phrases like "work done", "get it fixed", "need service" are NOT enough
               const hasSymptom = config.symptomKeywords.some(kw => cleaned.includes(kw));
-
               const vaguePhrase = config.vagueIssuePhrases.some(vp => cleaned.includes(vp)) ||
                 (cleaned.includes('tune up') && cleaned.split(' ').length <= 3);
 
               if (hasSymptom && !vaguePhrase) {
                 callState.issue = userText.trim();
+
+                if (isNoStartIssue) {
+                  callState.issueNeedsLastStarted = true;
+                }
               }
             }
           }
@@ -3175,8 +3188,82 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
+          // --- No-start follow-up before scheduling / ZIP ---
+          if (callState.issueNeedsLastStarted && !callState.askedLastStarted) {
+            callState.askedLastStarted = true;
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: `Got it — ${callState.machine.toLowerCase()} not starting. When was the last time it started?`,
+              last: true
+            }));
+            break;
+          }
+
+          if (callState.issueNeedsLastStarted && callState.askedLastStarted && !callState.lastStartedAnswer) {
+            callState.lastStartedAnswer = userText.trim();
+            callState.issue = `${callState.issue} | Last started: ${callState.lastStartedAnswer}`;
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: 'Would you like to schedule an appointment?',
+              last: true
+            }));
+            callState.askedForSchedule = true;
+            break;
+          }
+
+          // --- Ask to schedule before ZIP ---
+          if (!callState.issueNeedsLastStarted && !callState.askedForSchedule) {
+            callState.askedForSchedule = true;
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: 'Would you like to schedule an appointment?',
+              last: true
+            }));
+            break;
+          }
+
+          if (callState.askedForSchedule && !callState.zipConfirmed && !callState.inScheduling) {
+            const wantsAppointment =
+              cleaned.includes('yes') ||
+              cleaned.includes('schedule') ||
+              cleaned.includes('book') ||
+              cleaned.includes('appointment');
+
+            const doesNotWantAppointment =
+              cleaned.includes('no') ||
+              cleaned.includes('not right now') ||
+              cleaned.includes('just calling') ||
+              cleaned.includes('just wanted to ask');
+
+            if (wantsAppointment) {
+              callState.inScheduling = true;
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'What is your five digit zip code?',
+                last: true
+              }));
+              break;
+            }
+
+            if (doesNotWantAppointment) {
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'Okay, no problem. Have a great day.',
+                last: true
+              }));
+              break;
+            }
+
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: 'Would you like to schedule an appointment?',
+              last: true
+            }));
+            break;
+          }
+
           // --- ZIP capture ---
-          if (!callState.zipConfirmed) {
+          if (callState.inScheduling && !callState.zipConfirmed) {
             const possibleZip = normalizeSpokenDigits(userText).slice(0,5);
             if (!callState.zip && possibleZip.length === 5) {
               callState.zip = possibleZip;
@@ -3192,22 +3279,14 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
-          // --- Schedule offer ---
-          if (callState.askedForSchedule) {
-            const wants = cleaned.includes('yes') || cleaned.includes('schedule') || cleaned.includes('book') || cleaned.includes('appointment');
-            if (wants) {
-              callState.askedForSchedule = false;
-              callState.inScheduling = true;
-              const slots = await findAvailableSlots(callState.zip, 1, 7);
-              callState.offeredSlots = slots;
-              if (!slots.length) {
-                reply = 'Sorry, there are no available appointments right now. Please call back soon.';
-              } else {
-                reply = buildAvailabilitySpeech(slots);
-              }
+          // --- Show availability after ZIP confirmed ---
+          if (callState.zipConfirmed && callState.inScheduling && !callState.offeredSlots.length) {
+            const slots = await findAvailableSlots(callState.zip, 1, 7);
+            callState.offeredSlots = slots;
+            if (!slots.length) {
+              reply = 'Sorry, there are no available appointments right now. Please call back soon.';
             } else {
-              callState.askedForSchedule = false;
-              reply = 'Okay. If you change your mind, feel free to call us back.';
+              reply = buildAvailabilitySpeech(slots);
             }
             ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
             break;
