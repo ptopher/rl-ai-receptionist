@@ -3098,7 +3098,8 @@ wss.on('connection', (ws, req) => {
     timeWindow: '', serviceDate: '', callerName: '', phone: null,
     phoneConfirmed: false, address: null, addressConfirmed: false,
     email: null, emailConfirmed: false, booked: false,
-    askedLastStarted: false, lastStartedAnswer: '', issueNeedsLastStarted: false
+    askedLastStarted: false, lastStartedAnswer: '', issueNeedsLastStarted: false,
+    callEnded: false
   };
 
   ws.on('message', async (message) => {
@@ -3128,7 +3129,8 @@ wss.on('connection', (ws, req) => {
                 ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. What kind of equipment do you need help with?', last: true }));
                 break;
               }
-              ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that ZIP code area.", last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that ZIP code area. Goodbye.", last: true }));
+              callState.callEnded = true;
               break;
             } else {
               ws.send(JSON.stringify({ type: 'text', token: 'What ZIP code are you in?', last: true }));
@@ -3139,6 +3141,9 @@ wss.on('connection', (ws, req) => {
           console.log('Caller said:', userText);
           let reply = '';
 
+          if (callState.callEnded) {
+            break;
+          }
           const isNoStartIssue =
             cleaned.includes('not starting') ||
             cleaned.includes('won t start') ||
@@ -3513,8 +3518,9 @@ wss.on('connection', (ws, req) => {
                 });
               } catch (err) { console.error('Email failed:', err); }
               const readableAppt = callState.serviceDate ? getReadableDate(callState.serviceDate) : callState.selectedDay;
-              ws.send(JSON.stringify({ type: 'text', token: `You are all set, ${callState.callerName}. Your appointment is confirmed for ${readableAppt} between ${callState.timeWindow}. A confirmation is on its way to ${formatEmailForSpeech(callState.email)}. Thank you and have a great day.`, last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: `You are all set, ${callState.callerName}. Your appointment is confirmed for ${readableAppt} between ${callState.timeWindow}. A confirmation is on its way to ${formatEmailForSpeech(callState.email)}. Thank you, goodbye.`, last: true }));
               callState.booked = true;
+              callState.callEnded = true;
             } else {
               callState.email = null;
               ws.send(JSON.stringify({ type: 'text', token: 'What is the correct email address?', last: true }));
