@@ -7,7 +7,7 @@ module.exports = {
   // ===== BUSINESS IDENTITY =====
   businessName: 'RL Small Engines',
   homepageText: 'RL AI Receptionist is running',
-  welcomeGreeting: 'Thanks for calling RL Small Engines. What can I help you with today?',
+  welcomeGreeting: 'Thanks for calling RL Small Engines. I can help with scheduling, checking your service area, or whether we work on your equipment. Briefly tell me what you need.',
   testEmailTo: 'christopher@rlsmallengines.com',
   testAddress: '1748 Old Georgetown Court Severn Maryland 21144',
 
