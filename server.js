@@ -3133,6 +3133,7 @@ wss.on('connection', (ws, req) => {
               }
               ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that ZIP code area. Goodbye.", last: true }));
               callState.callEnded = true;
+              setTimeout(() => { try { ws.close(); } catch (e) {} }, 500);
               break;
             } else {
               ws.send(JSON.stringify({ type: 'text', token: 'What ZIP code are you in?', last: true }));
@@ -3508,6 +3509,7 @@ wss.on('connection', (ws, req) => {
               ws.send(JSON.stringify({ type: 'text', token: `You are all set, ${callState.callerName}. Your appointment is confirmed for ${readableAppt} between ${callState.timeWindow}. A confirmation is on its way to ${formatEmailForSpeech(callState.email)}. Thank you, goodbye.`, last: true }));
               callState.booked = true;
               callState.callEnded = true;
+              setTimeout(() => { try { ws.close(); } catch (e) {} }, 500);
             } else {
               callState.email = null;
               ws.send(JSON.stringify({ type: 'text', token: 'What is the correct email address?', last: true }));
