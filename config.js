@@ -210,18 +210,28 @@ Move the call forward efficiently while sounding natural and helpful.
   // ===== ISSUE DETECTION =====
   symptomKeywords: [
     'start', 'won t', 'wont', 'smoke', 'stall', 'surge',
-    'leak', 'broken', 'blade', 'belt', 'carb', 'starter',
+    'leak', 'blade', 'belt', 'carb', 'starter',
     'tune', 'oil', 'pull', 'dead', 'flat', 'tire',
     'battery', 'cut', 'clog', 'overheat', 'backfire', 'spark',
     'shut off', 'click', 'noise', 'vibrat', 'fuel', 'choke',
     'flood', 'not running', 'dies', 'sputt', 'rpm', 'throttle',
-    'string', 'deck', 'brake', 'fix', 'repair', 'won t work',
-    'not work', 'doesn t work', 'doesnt work', 'won t run',
-    'needs fix', 'needs repair', 'needs work'
+    'string', 'deck', 'brake'
   ],
 
   vagueIssuePhrases: [
-    'work done', 'worked on', 'looked at', 'checked out'
+    'work done',
+    'worked on',
+    'looked at',
+    'checked out',
+    'not working',
+    'doesn t work',
+    'doesnt work',
+    'needs fixed',
+    'needs repair',
+    'needs work',
+    'broken',
+    'fix it',
+    'repair it'
   ],
 
   machineOnlyWords: [
