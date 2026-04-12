@@ -3126,6 +3126,8 @@ wss.on('connection', (ws, req) => {
               const matchingCounties = getCountyForZip(callState.zip);
               const recognizedZip = matchingCounties.length > 0;
               if (recognizedZip) {
+                callState.zipConfirmed = true;
+                callState.awaitingZipConfirmation = false;
                 ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. What kind of equipment do you need help with?', last: true }));
                 break;
               }
@@ -3275,43 +3277,28 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
-          if (callState.askedForSchedule && !callState.zipConfirmed && !callState.inScheduling) {
-            const wantsAppointment =
-              cleaned.includes('yes') ||
-              cleaned.includes('schedule') ||
-              cleaned.includes('book') ||
-              cleaned.includes('appointment');
-
-            const doesNotWantAppointment =
-              cleaned.includes('no') ||
-              cleaned.includes('not right now') ||
-              cleaned.includes('just calling') ||
-              cleaned.includes('just wanted to ask');
-
-            if (wantsAppointment) {
+          if (callState.askedForSchedule) {
+            const wants = cleaned.includes('yes') || cleaned.includes('schedule') || cleaned.includes('book') || cleaned.includes('appointment');
+            if (wants) {
+              callState.askedForSchedule = false;
               callState.inScheduling = true;
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'What is your five digit zip code?',
-                last: true
-              }));
+              if (callState.zipConfirmed && callState.zip) {
+                const slots = await findAvailableSlots(callState.zip, 1, 7);
+                callState.offeredSlots = slots;
+                if (!slots.length) {
+                  reply = 'Sorry, there are no available appointments right now. Please call back soon.';
+                } else {
+                  reply = buildAvailabilitySpeech(slots);
+                }
+                ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+                break;
+              }
+              ws.send(JSON.stringify({ type: 'text', token: "What's your ZIP code?", last: true }));
               break;
             }
-
-            if (doesNotWantAppointment) {
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'Okay, no problem. Have a great day.',
-                last: true
-              }));
-              break;
-            }
-
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: 'Would you like to schedule an appointment?',
-              last: true
-            }));
+            callState.askedForSchedule = false;
+            reply = 'Alright, no problem.';
+            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
             break;
           }
 
