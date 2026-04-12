@@ -3516,7 +3516,7 @@ wss.on('connection', (ws, req) => {
               ws.send(JSON.stringify({ type: 'text', token: `You are all set, ${callState.callerName}. Your appointment is confirmed for ${readableAppt} between ${callState.timeWindow}. A confirmation is on its way to ${formatEmailForSpeech(callState.email)}. Thank you, goodbye.`, last: true }));
               callState.booked = true;
               callState.callEnded = true;
-              setTimeout(() => { try { ws.close(); } catch (e) {} }, 10500);
+              setTimeout(() => { try { ws.close(); } catch (e) {} }, 15000);
             } else {
               callState.email = null;
               ws.send(JSON.stringify({ type: 'text', token: 'What is the correct email address?', last: true }));
