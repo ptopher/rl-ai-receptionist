@@ -3122,12 +3122,14 @@ wss.on('connection', (ws, req) => {
             const possibleZip = normalizeSpokenDigits(text).slice(0, 5);
             if (possibleZip.length === 5) {
               callState.zip = possibleZip;
-              ws.send(JSON.stringify({ type: 'text', token: 'Let me check that ZIP code.', last: false }));
-              const inArea = getCountyForZip(callState.zip).length > 0;
-              const reply = inArea
-                ? 'Yeah, we do service that area.'
-                : "Sorry, we don't service that area.";
-              ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+              const matchingCounties = getCountyForZip(callState.zip);
+              const recognizedZip = matchingCounties.length > 0;
+              if (recognizedZip) {
+                ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. What kind of equipment do you need help with?', last: true }));
+                break;
+              }
+              ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that ZIP code area.", last: true }));
+              break;
             } else {
               ws.send(JSON.stringify({ type: 'text', token: 'What ZIP code are you in?', last: true }));
             }
