@@ -3168,13 +3168,32 @@ wss.on('connection', (ws, req) => {
           if (!callState.issue) {
             const machineWords = config.machineOnlyWords;
             const isMachineOnly = machineWords.includes(cleaned) || cleaned === cleanText(callState.machine);
-            const possibleZip = normalizeSpokenDigits(userText).slice(0,5);
-            if (!isMachineOnly && possibleZip.length !== 5) {
-              const hasSymptom = config.symptomKeywords.some(kw => cleaned.includes(kw));
-              const vaguePhrase = config.vagueIssuePhrases.some(vp => cleaned.includes(vp)) ||
-                (cleaned.includes('tune up') && cleaned.split(' ').length <= 3);
+            const possibleZip = normalizeSpokenDigits(userText).slice(0, 5);
 
-              if (hasSymptom && !vaguePhrase) {
+            if (!isMachineOnly && possibleZip.length !== 5) {
+
+              const hasSymptom = config.symptomKeywords.some(kw => cleaned.includes(kw));
+
+              const vaguePhrase =
+                config.vagueIssuePhrases.some(vp => cleaned.includes(vp)) ||
+                cleaned === 'not working' ||
+                cleaned === 'needs fixed' ||
+                cleaned === 'needs repair' ||
+                cleaned === 'broken' ||
+                cleaned.split(' ').length <= 3 && !hasSymptom;
+
+              // Do not accept vague issues
+              if (vaguePhrase) {
+                ws.send(JSON.stringify({
+                  type: 'text',
+                  token: `Got it — what is it doing or not doing?`,
+                  last: true
+                }));
+                break;
+              }
+
+              // Accept real issue
+              if (hasSymptom) {
                 callState.issue = userText.trim();
 
                 if (isNoStartIssue) {
@@ -3183,8 +3202,13 @@ wss.on('connection', (ws, req) => {
               }
             }
           }
+
           if (!callState.issue) {
-            ws.send(JSON.stringify({ type: 'text', token: `What seems to be the issue with your ${callState.machine.toLowerCase()}?`, last: true }));
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: `What seems to be the issue with your ${callState.machine.toLowerCase()}?`,
+              last: true
+            }));
             break;
           }
 
