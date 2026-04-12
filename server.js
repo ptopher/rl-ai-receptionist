@@ -3112,6 +3112,28 @@ wss.on('connection', (ws, req) => {
           const userText = data.voicePrompt || '';
           const cleaned = cleanText(userText);
           const text = userText.toLowerCase();
+
+          // ===== EARLY ZIP QUESTION DETECTION =====
+          if (
+            text.includes('do you service') ||
+            text.includes('service zip') ||
+            text.includes('cover zip')
+          ) {
+            const possibleZip = normalizeSpokenDigits(text).slice(0, 5);
+            if (possibleZip.length === 5) {
+              callState.zip = possibleZip;
+              ws.send(JSON.stringify({ type: 'text', token: 'Let me check that ZIP code.', last: false }));
+              const inArea = getCountyForZip(callState.zip).length > 0;
+              const reply = inArea
+                ? 'Yeah, we do service that area.'
+                : "Sorry, we don't service that area.";
+              ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+            } else {
+              ws.send(JSON.stringify({ type: 'text', token: 'What ZIP code are you in?', last: true }));
+            }
+            break;
+          }
+
           console.log('Caller said:', userText);
           let reply = '';
 
