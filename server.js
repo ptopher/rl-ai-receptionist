@@ -3115,8 +3115,8 @@ wss.on('connection', (ws, req) => {
           const text = userText.toLowerCase();
 
           // ===== EARLY ZIP QUESTION DETECTION =====
-          // Triggers when a 5-digit ZIP is present, or caller is clearly asking about service area
-          {
+          // Only runs before ZIP is confirmed and before booking is in progress
+          if (!callState.zipConfirmed && !callState.callerName && !callState.phone) {
             const possibleZip = normalizeSpokenDigits(text).slice(0, 5);
             const hasZip = possibleZip.length === 5;
             const isAreaQuestion =
@@ -3157,43 +3157,45 @@ wss.on('connection', (ws, req) => {
           }
 
           // ===== EARLY EQUIPMENT QUESTION DETECTION =====
-          // Triggers when caller asks about a specific machine type
-          if (
-            text.includes('do you work on') ||
-            text.includes('do you fix') ||
-            text.includes('do you repair') ||
-            text.includes('do you service')
-          ) {
-            let detectedMachine = null;
+          // Only runs before machine is known and before booking is in progress
+          if (!callState.machine && !callState.callerName && !callState.phone) {
+            if (
+              text.includes('do you work on') ||
+              text.includes('do you fix') ||
+              text.includes('do you repair') ||
+              text.includes('do you service')
+            ) {
+              let detectedMachine = null;
 
-            for (const m of config.machineTypes) {
-              for (const keyword of m.keywords) {
-                if (text.includes(keyword)) {
-                  detectedMachine = m.name;
-                  break;
+              for (const m of config.machineTypes) {
+                for (const keyword of m.keywords) {
+                  if (text.includes(keyword)) {
+                    detectedMachine = m.name;
+                    break;
+                  }
                 }
+                if (detectedMachine) break;
               }
-              if (detectedMachine) break;
-            }
 
-            if (detectedMachine) {
-              callState.machine = detectedMachine;
+              if (detectedMachine) {
+                callState.machine = detectedMachine;
+                ws.send(JSON.stringify({
+                  type: 'text',
+                  token: `Yeah, we do work on that. What's it doing or not doing?`,
+                  last: true
+                }));
+                break;
+              }
+
               ws.send(JSON.stringify({
                 type: 'text',
-                token: `Yeah, we do work on that. What's it doing or not doing?`,
+                token: "Sorry, we don't work on that equipment.",
                 last: true
               }));
+              callState.callEnded = true;
+              setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
               break;
             }
-
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: "Sorry, we don't work on that equipment.",
-              last: true
-            }));
-            callState.callEnded = true;
-            setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
-            break;
           }
 
           console.log('Caller said:', userText);
