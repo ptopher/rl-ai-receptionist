@@ -3115,29 +3115,83 @@ wss.on('connection', (ws, req) => {
           const text = userText.toLowerCase();
 
           // ===== EARLY ZIP QUESTION DETECTION =====
-          if (
-            text.includes('do you service') ||
-            text.includes('service zip') ||
-            text.includes('cover zip')
-          ) {
+          // Triggers when a 5-digit ZIP is present, or caller is clearly asking about service area
+          {
             const possibleZip = normalizeSpokenDigits(text).slice(0, 5);
-            if (possibleZip.length === 5) {
-              callState.zip = possibleZip;
-              const matchingCounties = getCountyForZip(callState.zip);
-              const recognizedZip = matchingCounties.length > 0;
-              if (recognizedZip) {
-                callState.zipConfirmed = true;
-                callState.awaitingZipConfirmation = false;
-                ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. What kind of equipment do you need help with?', last: true }));
+            const hasZip = possibleZip.length === 5;
+            const isAreaQuestion =
+              text.includes('service zip') ||
+              text.includes('cover zip') ||
+              text.includes('zip code') ||
+              text.includes('what area') ||
+              text.includes('service my area') ||
+              text.includes('service that area');
+            const hasMachineKeyword = config.machineTypes.some(m =>
+              m.keywords.some(kw => text.includes(kw))
+            );
+            const isServiceQuestion =
+              (text.includes('do you service') || text.includes('do you cover')) &&
+              !hasMachineKeyword;
+
+            if (hasZip || isAreaQuestion || (isServiceQuestion && !hasZip)) {
+              if (hasZip) {
+                callState.zip = possibleZip;
+                const matchingCounties = getCountyForZip(callState.zip);
+                const recognizedZip = matchingCounties.length > 0;
+                if (recognizedZip) {
+                  callState.zipConfirmed = true;
+                  callState.awaitingZipConfirmation = false;
+                  ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. What kind of equipment do you need help with?', last: true }));
+                  break;
+                }
+                ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that ZIP code area. Goodbye.", last: true }));
+                callState.callEnded = true;
+                setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
                 break;
               }
-              ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that ZIP code area. Goodbye.", last: true }));
-              callState.callEnded = true;
-              setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
-              break;
-            } else {
+              // Area question with no ZIP — ask for it
               ws.send(JSON.stringify({ type: 'text', token: 'What ZIP code are you in?', last: true }));
+              break;
             }
+          }
+
+          // ===== EARLY EQUIPMENT QUESTION DETECTION =====
+          // Triggers when caller asks about a specific machine type
+          if (
+            text.includes('do you work on') ||
+            text.includes('do you fix') ||
+            text.includes('do you repair') ||
+            text.includes('do you service')
+          ) {
+            let detectedMachine = null;
+
+            for (const m of config.machineTypes) {
+              for (const keyword of m.keywords) {
+                if (text.includes(keyword)) {
+                  detectedMachine = m.name;
+                  break;
+                }
+              }
+              if (detectedMachine) break;
+            }
+
+            if (detectedMachine) {
+              callState.machine = detectedMachine;
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: `Yeah, we do work on that. What's it doing or not doing?`,
+                last: true
+              }));
+              break;
+            }
+
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: "Sorry, we don't work on that equipment.",
+              last: true
+            }));
+            callState.callEnded = true;
+            setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
             break;
           }
 
