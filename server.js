@@ -3213,20 +3213,23 @@ wss.on('connection', (ws, req) => {
             cleaned.includes('doesnt start');
 
           // --- ZIP confirmation ---
+          // Clear awaitingZipConfirmation if ZIP is already confirmed — prevents it from intercepting later turns
+          if (callState.awaitingZipConfirmation && callState.zipConfirmed) {
+            callState.awaitingZipConfirmation = false;
+          }
+
           if (callState.awaitingZipConfirmation) {
             const dec = detectYesNoText(userText);
             if (dec === 'yes') {
               callState.awaitingZipConfirmation = false;
               callState.zipConfirmed = true;
-              // If already confirmed serviceable (e.g. via early ZIP detection), skip re-check
               if (callState.serviceable) {
+                // Already confirmed serviceable — skip re-check, go straight to slots
                 const slots = await findAvailableSlots(callState.zip, 1, 7);
                 callState.offeredSlots = slots;
-                if (!slots.length) {
-                  reply = 'We service that area, but there are no available appointments right now. Please call back soon.';
-                } else {
-                  reply = `Great. ${buildAvailabilitySpeech(slots)}`;
-                }
+                reply = slots.length
+                  ? `Great. ${buildAvailabilitySpeech(slots)}`
+                  : 'We service that area, but there are no available appointments right now. Please call back soon.';
               } else {
                 const counties = getCountyForZip(callState.zip);
                 if (!counties.length) {
@@ -3235,11 +3238,9 @@ wss.on('connection', (ws, req) => {
                   callState.serviceable = true;
                   const slots = await findAvailableSlots(callState.zip, 1, 7);
                   callState.offeredSlots = slots;
-                  if (!slots.length) {
-                    reply = 'We service that area, but there are no available appointments right now. Please call back soon.';
-                  } else {
-                    reply = `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`;
-                  }
+                  reply = slots.length
+                    ? `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`
+                    : 'We service that area, but there are no available appointments right now. Please call back soon.';
                 }
               }
             } else if (dec === 'no') {
