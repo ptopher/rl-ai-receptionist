@@ -3142,7 +3142,14 @@ wss.on('connection', (ws, req) => {
                   callState.zipConfirmed = true;
                   callState.serviceable = true;
                   callState.awaitingZipConfirmation = false;
-                  ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. What kind of equipment do you need help with?', last: true }));
+                  if (callState.machine && callState.issue) {
+                    ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. Do you want to get something scheduled?', last: true }));
+                    callState.askedForSchedule = true;
+                  } else if (callState.machine) {
+                    ws.send(JSON.stringify({ type: 'text', token: `Yeah, we do service that area. What's going on with your ${callState.machine.toLowerCase()}?`, last: true }));
+                  } else {
+                    ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. What kind of equipment do you need help with?', last: true }));
+                  }
                   break;
                 }
                 ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that ZIP code area. Goodbye.", last: true }));
