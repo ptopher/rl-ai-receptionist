@@ -3093,7 +3093,7 @@ wss.on('connection', (ws, req) => {
   console.log('ConversationRelay connected');
   const callState = {
     machine: '', issue: '', zip: '', awaitingZipConfirmation: false,
-    zipConfirmed: false, askedForSchedule: false, inScheduling: false,
+    zipConfirmed: false, serviceable: false, askedForSchedule: false, inScheduling: false,
     offeredSlots: [], selectedSlot: null, selectedDay: null, dayConfirmed: false,
     timeWindow: '', serviceDate: '', callerName: '', phone: null,
     phoneConfirmed: false, address: null, addressConfirmed: false,
@@ -3140,6 +3140,7 @@ wss.on('connection', (ws, req) => {
                 const recognizedZip = matchingCounties.length > 0;
                 if (recognizedZip) {
                   callState.zipConfirmed = true;
+                  callState.serviceable = true;
                   callState.awaitingZipConfirmation = false;
                   ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. What kind of equipment do you need help with?', last: true }));
                   break;
@@ -3217,16 +3218,28 @@ wss.on('connection', (ws, req) => {
             if (dec === 'yes') {
               callState.awaitingZipConfirmation = false;
               callState.zipConfirmed = true;
-              const counties = getCountyForZip(callState.zip);
-              if (!counties.length) {
-                reply = `Sorry, we do not service zip code ${callState.zip}. Please call back if you need anything else.`;
-              } else {
+              // If already confirmed serviceable (e.g. via early ZIP detection), skip re-check
+              if (callState.serviceable) {
                 const slots = await findAvailableSlots(callState.zip, 1, 7);
                 callState.offeredSlots = slots;
                 if (!slots.length) {
                   reply = 'We service that area, but there are no available appointments right now. Please call back soon.';
                 } else {
-                  reply = `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`;
+                  reply = `Great. ${buildAvailabilitySpeech(slots)}`;
+                }
+              } else {
+                const counties = getCountyForZip(callState.zip);
+                if (!counties.length) {
+                  reply = `Sorry, we do not service zip code ${callState.zip}. Please call back if you need anything else.`;
+                } else {
+                  callState.serviceable = true;
+                  const slots = await findAvailableSlots(callState.zip, 1, 7);
+                  callState.offeredSlots = slots;
+                  if (!slots.length) {
+                    reply = 'We service that area, but there are no available appointments right now. Please call back soon.';
+                  } else {
+                    reply = `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`;
+                  }
                 }
               }
             } else if (dec === 'no') {
