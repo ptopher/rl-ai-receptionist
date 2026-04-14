@@ -3099,6 +3099,7 @@ wss.on('connection', (ws, req) => {
     phoneConfirmed: false, address: null, addressConfirmed: false,
     email: null, emailConfirmed: false, booked: false,
     askedLastStarted: false, lastStartedAnswer: '', issueNeedsLastStarted: false,
+    issueNeedsTuneUpClarification: false, gaveTuneUpClarification: false,
     callEnded: false
   };
 
@@ -3276,11 +3277,11 @@ wss.on('connection', (ws, req) => {
           // --- Issue ---
           if (!callState.issue) {
             const machineWords = config.machineOnlyWords;
-            const isMachineOnly = machineWords.includes(cleaned) || cleaned === cleanText(callState.machine);
+            const isMachineOnly =
+              machineWords.includes(cleaned) || cleaned === cleanText(callState.machine);
             const possibleZip = normalizeSpokenDigits(userText).slice(0, 5);
 
             if (!isMachineOnly && possibleZip.length !== 5) {
-
               const hasSymptom = config.symptomKeywords.some(kw => cleaned.includes(kw));
 
               const vaguePhrase =
@@ -3289,35 +3290,63 @@ wss.on('connection', (ws, req) => {
                 cleaned === 'needs fixed' ||
                 cleaned === 'needs repair' ||
                 cleaned === 'broken' ||
-                cleaned.split(' ').length <= 3 && !hasSymptom;
+                (cleaned.split(' ').length <= 3 && !hasSymptom);
 
-              // Do not accept vague issues
+              const isNoStartIssue =
+                cleaned.includes("won't start") ||
+                cleaned.includes('wont start') ||
+                cleaned.includes('will not start') ||
+                cleaned.includes('not starting') ||
+                cleaned.includes('no start') ||
+                cleaned.includes('won\'t start');
+
+              const mentionsTuneUp =
+                cleaned.includes('tune up') ||
+                cleaned.includes('tune-up') ||
+                cleaned.includes('tuneup');
+
               if (vaguePhrase) {
                 ws.send(JSON.stringify({
                   type: 'text',
-                  token: `Got it — what is it doing or not doing?`,
+                  token: 'Got it — what is it doing or not doing?',
                   last: true
                 }));
                 break;
               }
 
-              // Accept real issue
-              if (hasSymptom) {
+              if (hasSymptom || isNoStartIssue) {
                 callState.issue = userText.trim();
 
                 if (isNoStartIssue) {
                   callState.issueNeedsLastStarted = true;
+
+                  if (mentionsTuneUp) {
+                    callState.issueNeedsTuneUpClarification = true;
+                  }
                 }
               }
             }
           }
 
+          // Still no issue? Ask once.
           if (!callState.issue) {
             ws.send(JSON.stringify({
               type: 'text',
               token: `What seems to be the issue with your ${callState.machine.toLowerCase()}?`,
               last: true
             }));
+            break;
+          }
+
+          // --- Tune-up clarification for no-start ---
+          if (callState.issueNeedsTuneUpClarification && !callState.gaveTuneUpClarification) {
+            callState.gaveTuneUpClarification = true;
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: 'Got it — if it is not starting, a tune-up may not fix it by itself. We may need to diagnose it first. When was the last time it started?',
+              last: true
+            }));
+            callState.askedLastStarted = true;
             break;
           }
 
