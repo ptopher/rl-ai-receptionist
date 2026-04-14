@@ -3144,7 +3144,15 @@ wss.on('connection', (ws, req) => {
                   callState.zipConfirmed = true;
                   callState.serviceable = true;
                   callState.awaitingZipConfirmation = false;
-                  if (callState.machine && callState.issue) {
+                  if (callState.inScheduling) {
+                    // Already said yes to scheduling — skip asking again, go straight to slots
+                    const slots = await findAvailableSlots(callState.zip, 1, 7);
+                    callState.offeredSlots = slots;
+                    const avail = slots.length
+                      ? `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`
+                      : 'We service that area, but there are no available appointments right now. Please call back soon.';
+                    ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
+                  } else if (callState.machine && callState.issue) {
                     ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. Do you want to get something scheduled?', last: true }));
                     callState.askedForSchedule = true;
                   } else if (callState.machine) {
