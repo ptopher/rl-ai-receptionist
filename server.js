@@ -3267,7 +3267,23 @@ wss.on('connection', (ws, req) => {
           // --- Machine ---
           if (!callState.machine) {
             const m = detectMachine(userText);
-            if (m) callState.machine = m;
+            if (m) {
+              callState.machine = m;
+              // If caller gave more than just the machine name, try to extract issue too
+              const mc = cleanText(m);
+              const stripped = cleaned.replace(mc, '').trim();
+              if (stripped.length > 0 && !callState.issue) {
+                const hasSymptom = config.symptomKeywords.some(kw => stripped.includes(kw));
+                const isNoStart =
+                  stripped.includes("won't start") || stripped.includes('wont start') ||
+                  stripped.includes('will not start') || stripped.includes('not starting') ||
+                  stripped.includes('no start');
+                if (hasSymptom || isNoStart) {
+                  callState.issue = userText.trim();
+                  if (isNoStart) callState.issueNeedsLastStarted = true;
+                }
+              }
+            }
           }
           if (!callState.machine) {
             ws.send(JSON.stringify({ type: 'text', token: 'What type of machine do you need help with?', last: true }));
@@ -3380,7 +3396,8 @@ wss.on('connection', (ws, req) => {
             !callState.inScheduling &&
             !callState.selectedDay &&
             !callState.dayConfirmed &&
-            !callState.booked
+            !callState.booked &&
+            !callState.offeredSlots.length
           ) {
             callState.askedForSchedule = true;
             ws.send(JSON.stringify({
