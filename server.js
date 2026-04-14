@@ -3100,6 +3100,7 @@ wss.on('connection', (ws, req) => {
     email: null, emailConfirmed: false, booked: false,
     askedLastStarted: false, lastStartedAnswer: '', issueNeedsLastStarted: false,
     issueNeedsTuneUpClarification: false, gaveTuneUpClarification: false,
+    pendingIssue: null, pendingIssueNeedsLastStarted: false,
     callEnded: false
   };
 
@@ -3269,19 +3270,40 @@ wss.on('connection', (ws, req) => {
             const m = detectMachine(userText);
             if (m) {
               callState.machine = m;
-              // If caller gave more than just the machine name, try to extract issue too
-              const mc = cleanText(m);
-              const stripped = cleaned.replace(mc, '').trim();
-              if (stripped.length > 0 && !callState.issue) {
-                const hasSymptom = config.symptomKeywords.some(kw => stripped.includes(kw));
-                const isNoStart =
-                  stripped.includes("won't start") || stripped.includes('wont start') ||
-                  stripped.includes('will not start') || stripped.includes('not starting') ||
-                  stripped.includes('no start');
-                if (hasSymptom || isNoStart) {
-                  callState.issue = userText.trim();
-                  if (isNoStart) callState.issueNeedsLastStarted = true;
+              // Apply any issue info captured before machine was known
+              if (callState.pendingIssue && !callState.issue) {
+                callState.issue = callState.pendingIssue;
+                if (callState.pendingIssueNeedsLastStarted) {
+                  callState.issueNeedsLastStarted = true;
                 }
+                callState.pendingIssue = null;
+                callState.pendingIssueNeedsLastStarted = false;
+              } else {
+                // Try to extract issue from current utterance alongside machine name
+                const mc = cleanText(m);
+                const stripped = cleaned.replace(mc, '').trim();
+                if (stripped.length > 0 && !callState.issue) {
+                  const hasSymptom = config.symptomKeywords.some(kw => stripped.includes(kw));
+                  const isNoStart =
+                    stripped.includes("won't start") || stripped.includes('wont start') ||
+                    stripped.includes('will not start') || stripped.includes('not starting') ||
+                    stripped.includes('no start');
+                  if (hasSymptom || isNoStart) {
+                    callState.issue = userText.trim();
+                    if (isNoStart) callState.issueNeedsLastStarted = true;
+                  }
+                }
+              }
+            } else {
+              // No machine detected — check if caller gave issue info, save it for later
+              const hasSymptom = config.symptomKeywords.some(kw => cleaned.includes(kw));
+              const isNoStart =
+                cleaned.includes("won't start") || cleaned.includes('wont start') ||
+                cleaned.includes('will not start') || cleaned.includes('not starting') ||
+                cleaned.includes('no start');
+              if ((hasSymptom || isNoStart) && !callState.pendingIssue) {
+                callState.pendingIssue = userText.trim();
+                if (isNoStart) callState.pendingIssueNeedsLastStarted = true;
               }
             }
           }
