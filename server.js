@@ -3273,6 +3273,23 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
+          // ===== COMMERCIAL EQUIPMENT FILTER =====
+          {
+            const commercialKeywords = config.commercialKeywords || [
+              'commercial', 'stand on', 'stand-on', 'standon', 'pro series',
+              'zero turn commercial', 'heavy duty', 'industrial', 'fleet'
+            ];
+            const isCommercial = commercialKeywords.some(kw => cleaned.includes(kw));
+            if (isCommercial) {
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: "Got it — we focus on residential equipment only. We don't service commercial units, but I can still help answer a quick question if you'd like.",
+                last: true
+              }));
+              break;
+            }
+          }
+
           // --- Machine ---
           if (!callState.machine) {
             const m = detectMachine(userText);
@@ -3320,22 +3337,6 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
-          // ===== COMMERCIAL EQUIPMENT FILTER =====
-          {
-            const commercialKeywords = config.commercialKeywords || [
-              'commercial', 'stand on', 'stand-on', 'standon', 'pro series',
-              'zero turn commercial', 'heavy duty', 'industrial', 'fleet'
-            ];
-            const isCommercial = commercialKeywords.some(kw => cleaned.includes(kw));
-            if (isCommercial) {
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: "Got it — we focus on residential equipment only. We don't service commercial units, but I can still help answer a quick question if you'd like.",
-                last: true
-              }));
-              break;
-            }
-          }
           if (!callState.issue) {
             const machineWords = config.machineOnlyWords;
             const isMachineOnly =
