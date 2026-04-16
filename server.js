@@ -3284,9 +3284,11 @@ wss.on('connection', (ws, req) => {
             if (isCommercial) {
               ws.send(JSON.stringify({
                 type: 'text',
-                token: "Got it — we focus on residential equipment only. We don't service commercial units, but I can still help answer a quick question if you'd like.",
+                token: "Sorry, we only service residential equipment. Goodbye.",
                 last: true
               }));
+              callState.callEnded = true;
+              setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
               break;
             }
           }
