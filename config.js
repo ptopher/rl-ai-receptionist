@@ -206,7 +206,15 @@ Move the call forward efficiently while sounding natural and helpful.
       keywords: ['snow blower', 'snowblower', 'snow thrower']
     }
   ],
-
+commercialKeywords: [
+  'commercial',
+  'stand on',
+  'stand-on',
+  'stander',
+  'pro series',
+  'industrial',
+  'fleet'
+],
   // ===== ISSUE DETECTION =====
   symptomKeywords: [
     'start', 'won t', 'wont', 'smoke', 'stall', 'surge',
