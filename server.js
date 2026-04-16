@@ -3279,7 +3279,8 @@ wss.on('connection', (ws, req) => {
               'commercial', 'stand on', 'stand-on', 'standon', 'pro series',
               'zero turn commercial', 'heavy duty', 'industrial', 'fleet'
             ];
-            const isCommercial = commercialKeywords.some(kw => cleaned.includes(kw));
+            const isCommercial = commercialKeywords.some(kw => cleaned.includes(kw) || text.includes(kw));
+            console.log('[COMMERCIAL CHECK] cleaned:', cleaned, '| isCommercial:', isCommercial);
             if (isCommercial) {
               ws.send(JSON.stringify({
                 type: 'text',
