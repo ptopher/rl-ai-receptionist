@@ -67,9 +67,9 @@ Move the call forward efficiently while sounding natural and helpful.
     fridaySaturdayMorningWindow: '10:00 to 12:00',
     fridaySaturdayAfternoonWindow: '1:00 to 4:00',
 
-    mondayThursdayMax: 1,
-    fridaySaturdayMorningMax: 2,
-    fridaySaturdayAfternoonMax: 3
+    mondayThursdayMax: 0,
+    fridaySaturdayMorningMax: 3,
+    fridaySaturdayAfternoonMax: 4
   },
 
   // ===== EMAIL SETTINGS (Resend) =====
@@ -206,15 +206,16 @@ Move the call forward efficiently while sounding natural and helpful.
       keywords: ['snow blower', 'snowblower', 'snow thrower']
     }
   ],
-commercialKeywords: [
-  'commercial',
-  'stand on',
-  'stand-on',
-  'stander',
-  'pro series',
-  'industrial',
-  'fleet'
-],
+  commercialKeywords: [
+    'commercial',
+    'stand on',
+    'stand-on',
+    'stander',
+    'pro series',
+    'industrial',
+    'fleet'
+  ],
+
   // ===== ISSUE DETECTION =====
   symptomKeywords: [
     'start', 'won t', 'wont', 'smoke', 'stall', 'surge',
