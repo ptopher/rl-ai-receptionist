@@ -1355,6 +1355,79 @@ async function rebalanceFridaySaturdayJobs(serviceDate) {
   saveAllJobs(jobs);
 }
 
+async function buildFridaySaturdayDistancePlan(zip, serviceDate, dayName) {
+  const matchingCounties = getCountyForZip(zip);
+  if (matchingCounties.length === 0) return null;
+
+  const allowed =
+    dayName === 'Friday'
+      ? routingConfig.fridayAllowedCounties
+      : routingConfig.saturdayAllowedCounties;
+
+  const matchedAllowed = matchingCounties.find((county) =>
+    allowed.includes(county)
+  );
+
+  if (!matchedAllowed) {
+    return null;
+  }
+
+  const existingJobs = loadJobs();
+  const dayJobs = getAppointmentJobsForDate(existingJobs, serviceDate);
+  const maxJobsForDay =
+    routingConfig.fridaySaturdayMorningMax +
+    routingConfig.fridaySaturdayAfternoonMax;
+
+  if (dayJobs.length >= maxJobsForDay) {
+    return null;
+  }
+
+  const compareList = dayJobs.map((job) => ({
+    id: job.id,
+    zip: job.zip,
+    serviceWindow: job.serviceWindow
+  }));
+  compareList.push({ id: '__temp__', zip, serviceWindow: '' });
+
+  const enriched = [];
+  for (const item of compareList) {
+    const distance = await getDistanceFromHomeMiles(item.zip);
+    enriched.push({ ...item, distance });
+  }
+
+  enriched.sort((a, b) => a.distance - b.distance);
+
+  const tempIndex = enriched.findIndex((item) => item.id === '__temp__');
+  const serviceWindow =
+    tempIndex < routingConfig.fridaySaturdayMorningMax
+      ? routingConfig.fridaySaturdayMorningWindow
+      : routingConfig.fridaySaturdayAfternoonWindow;
+
+  const morningOpenSpots = Math.max(
+    routingConfig.fridaySaturdayMorningMax - dayJobs.filter(
+      (job) => job.serviceWindow === routingConfig.fridaySaturdayMorningWindow
+    ).length,
+    0
+  );
+  const afternoonOpenSpots = Math.max(
+    routingConfig.fridaySaturdayAfternoonMax - dayJobs.filter(
+      (job) => job.serviceWindow === routingConfig.fridaySaturdayAfternoonWindow
+    ).length,
+    0
+  );
+
+  return {
+    serviceDate,
+    serviceDay: dayName,
+    serviceCounty: matchedAllowed,
+    serviceWindow,
+    tempIndex,
+    morningOpenSpots,
+    afternoonOpenSpots,
+    maxJobsForDay
+  };
+}
+
 async function getSlotForDate(zip, serviceDate, dayName) {
   const matchingCounties = getCountyForZip(zip);
   if (matchingCounties.length === 0) return null;
@@ -1381,51 +1454,17 @@ async function getSlotForDate(zip, serviceDate, dayName) {
   }
 
   if (dayName === 'Friday' || dayName === 'Saturday') {
-    const allowed =
-      dayName === 'Friday'
-        ? routingConfig.fridayAllowedCounties
-        : routingConfig.saturdayAllowedCounties;
-
-    const matchedAllowed = matchingCounties.find((county) =>
-      allowed.includes(county)
-    );
-
-    if (!matchedAllowed) {
+    const distancePlan = await buildFridaySaturdayDistancePlan(zip, serviceDate, dayName);
+    if (!distancePlan) {
       return null;
     }
 
-    if (
-      dayJobs.length <
-      routingConfig.fridaySaturdayMorningMax +
-        routingConfig.fridaySaturdayAfternoonMax
-    ) {
-      const tempCandidate = { id: '__temp__', zip };
-      const compareList = dayJobs.map((job) => ({ id: job.id, zip: job.zip }));
-      compareList.push(tempCandidate);
-
-      const enriched = [];
-      for (const item of compareList) {
-        const distance = await getDistanceFromHomeMiles(item.zip);
-        enriched.push({ ...item, distance });
-      }
-
-      enriched.sort((a, b) => a.distance - b.distance);
-      const tempIndex = enriched.findIndex((item) => item.id === '__temp__');
-
-      const serviceWindow =
-        tempIndex < routingConfig.fridaySaturdayMorningMax
-          ? routingConfig.fridaySaturdayMorningWindow
-          : routingConfig.fridaySaturdayAfternoonWindow;
-
-      return {
-        serviceDate,
-        serviceDay: dayName,
-        serviceCounty: matchedAllowed,
-        serviceWindow
-      };
-    }
-
-    return null;
+    return {
+      serviceDate,
+      serviceDay: dayName,
+      serviceCounty: distancePlan.serviceCounty,
+      serviceWindow: distancePlan.serviceWindow
+    };
   }
 
   return null;
@@ -1456,20 +1495,34 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
       continue;
     }
 
-    // For Fri/Sat, add both morning and afternoon slots if available
     if ((dayName === 'Friday' || dayName === 'Saturday') && !seenDates.has(serviceDate)) {
-      const allowed = dayName === 'Friday' ? routingConfig.fridayAllowedCounties : routingConfig.saturdayAllowedCounties;
-      const matchedAllowed = matchingCounties.find(c => allowed.includes(c));
-      if (matchedAllowed) {
-        const dayJobs = getAppointmentJobsForDate(loadJobs(), serviceDate);
-        const morningFull = dayJobs.filter(j => j.serviceWindow === routingConfig.fridaySaturdayMorningWindow).length >= routingConfig.fridaySaturdayMorningMax;
-        const afternoonFull = dayJobs.filter(j => j.serviceWindow === routingConfig.fridaySaturdayAfternoonWindow).length >= routingConfig.fridaySaturdayAfternoonMax;
-        if (!morningFull) {
-          results.push({ serviceDate, serviceDay: dayName, serviceCounty: matchedAllowed, serviceWindow: routingConfig.fridaySaturdayMorningWindow, readableDate: getReadableDate(serviceDate) });
+      const distancePlan = await buildFridaySaturdayDistancePlan(zip, serviceDate, dayName);
+      if (distancePlan) {
+        const shouldOfferMorning =
+          distancePlan.serviceWindow === routingConfig.fridaySaturdayMorningWindow &&
+          distancePlan.morningOpenSpots > 0;
+        const shouldOfferAfternoon = distancePlan.afternoonOpenSpots > 0;
+
+        if (shouldOfferMorning && results.length < maxSlots) {
+          results.push({
+            serviceDate,
+            serviceDay: dayName,
+            serviceCounty: distancePlan.serviceCounty,
+            serviceWindow: routingConfig.fridaySaturdayMorningWindow,
+            readableDate: getReadableDate(serviceDate)
+          });
         }
-        if (!afternoonFull) {
-          results.push({ serviceDate, serviceDay: dayName, serviceCounty: matchedAllowed, serviceWindow: routingConfig.fridaySaturdayAfternoonWindow, readableDate: getReadableDate(serviceDate) });
+
+        if (shouldOfferAfternoon && results.length < maxSlots) {
+          results.push({
+            serviceDate,
+            serviceDay: dayName,
+            serviceCounty: distancePlan.serviceCounty,
+            serviceWindow: routingConfig.fridaySaturdayAfternoonWindow,
+            readableDate: getReadableDate(serviceDate)
+          });
         }
+
         seenDates.add(serviceDate);
       }
       continue;
