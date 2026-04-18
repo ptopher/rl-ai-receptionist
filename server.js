@@ -3852,7 +3852,7 @@ wss.on('connection', (ws, req) => {
                 last: true
               }));
               callState.callEnded = true;
-              setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
+              setTimeout(() => { try { ws.close(); } catch (e) {} }, 25000);
             } else if (dec === 'no') {
               callState.email = null;
               ws.send(JSON.stringify({
