@@ -3264,8 +3264,8 @@ wss.on('connection', (ws, req) => {
           const text = userText.toLowerCase();
 
           // ===== EARLY ZIP QUESTION DETECTION =====
-          // Only runs before ZIP is confirmed and before booking is in progress
-          if (!callState.zipConfirmed && !callState.callerName && !callState.phone) {
+          // Only runs for actual service-area questions before scheduling starts.
+          if (!callState.zipConfirmed && !callState.callerName && !callState.phone && !callState.inScheduling) {
             const possibleZip = normalizeSpokenDigits(text).slice(0, 5);
             const possibleCity = extractCityFromLocationText(userText, possibleZip);
             const hasZip = possibleZip.length === 5;
@@ -3284,7 +3284,7 @@ wss.on('connection', (ws, req) => {
               (text.includes('do you service') || text.includes('do you cover')) &&
               !hasMachineKeyword;
 
-            if ((hasZip && hasCity) || isAreaQuestion || isServiceQuestion || hasZip || hasCity) {
+            if (isAreaQuestion || isServiceQuestion) {
               if (hasZip && hasCity) {
                 const zipCity = await extractValidatedZipCityFromSpeech(userText);
                 if (zipCity.ok) {
@@ -3296,14 +3296,7 @@ wss.on('connection', (ws, req) => {
                     callState.zipConfirmed = true;
                     callState.serviceable = true;
                     callState.awaitingZipConfirmation = false;
-                    if (callState.inScheduling) {
-                      const slots = await findAvailableSlots(callState.zip, 1, 7);
-                      callState.offeredSlots = slots;
-                      const avail = slots.length
-                        ? `Great, we do service ${zipCity.city}. ${buildAvailabilitySpeech(slots)}`
-                        : 'We service that area, but there are no available appointments right now. Please call back soon.';
-                      ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
-                    } else if (callState.machine && callState.issue) {
+                    if (callState.machine && callState.issue) {
                       ws.send(JSON.stringify({ type: 'text', token: `Yeah, we do service ${zipCity.city}. Do you want to get something scheduled?`, last: true }));
                       callState.askedForSchedule = true;
                     } else if (callState.machine) {
