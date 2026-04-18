@@ -1475,26 +1475,44 @@ async function buildFridaySaturdayDistancePlan(zip, serviceDate, dayName) {
     enriched.push({ ...item, distance });
   }
 
-  enriched.sort((a, b) => a.distance - b.distance);
+  const tempEntry = enriched.find((item) => item.id === '__temp__');
+  const tempDistance = tempEntry ? tempEntry.distance : 0;
+
+  const morningJobs = dayJobs.filter(
+    (job) => job.serviceWindow === routingConfig.fridaySaturdayMorningWindow
+  );
+  const afternoonJobs = dayJobs.filter(
+    (job) => job.serviceWindow === routingConfig.fridaySaturdayAfternoonWindow
+  );
+
+  const morningOpenSpots = Math.max(routingConfig.fridaySaturdayMorningMax - morningJobs.length, 0);
+  const afternoonOpenSpots = Math.max(routingConfig.fridaySaturdayAfternoonMax - afternoonJobs.length, 0);
+
+  // Far ZIPs (>10 miles) default to afternoon; near ZIPs default to morning
+  // Only overflow to the other window if preferred window is full
+  const FAR_THRESHOLD_MILES = 10;
+  const isFar = tempDistance > FAR_THRESHOLD_MILES;
+
+  let serviceWindow;
+  if (isFar) {
+    if (afternoonOpenSpots > 0) {
+      serviceWindow = routingConfig.fridaySaturdayAfternoonWindow;
+    } else if (morningOpenSpots > 0) {
+      serviceWindow = routingConfig.fridaySaturdayMorningWindow;
+    } else {
+      return null;
+    }
+  } else {
+    if (morningOpenSpots > 0) {
+      serviceWindow = routingConfig.fridaySaturdayMorningWindow;
+    } else if (afternoonOpenSpots > 0) {
+      serviceWindow = routingConfig.fridaySaturdayAfternoonWindow;
+    } else {
+      return null;
+    }
+  }
 
   const tempIndex = enriched.findIndex((item) => item.id === '__temp__');
-  const serviceWindow =
-    tempIndex < routingConfig.fridaySaturdayMorningMax
-      ? routingConfig.fridaySaturdayMorningWindow
-      : routingConfig.fridaySaturdayAfternoonWindow;
-
-  const morningOpenSpots = Math.max(
-    routingConfig.fridaySaturdayMorningMax - dayJobs.filter(
-      (job) => job.serviceWindow === routingConfig.fridaySaturdayMorningWindow
-    ).length,
-    0
-  );
-  const afternoonOpenSpots = Math.max(
-    routingConfig.fridaySaturdayAfternoonMax - dayJobs.filter(
-      (job) => job.serviceWindow === routingConfig.fridaySaturdayAfternoonWindow
-    ).length,
-    0
-  );
 
   return {
     serviceDate,
