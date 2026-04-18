@@ -1,3 +1,4 @@
+
 const express = require('express');
 const fs = require('fs');
 const WebSocket = require('ws');
@@ -3783,7 +3784,7 @@ wss.on('connection', (ws, req) => {
               callState.addressConfirmed = true;
               ws.send(JSON.stringify({
                 type: 'text',
-                token: 'What email address would you like us to use for your appointment confirmation?',
+                token: 'What email address would you like us to use? We will send your appointment confirmation there.',
                 last: true
               }));
             } else if (dec === 'no') {
@@ -3866,7 +3867,7 @@ wss.on('connection', (ws, req) => {
 
               ws.send(JSON.stringify({
                 type: 'text',
-                token: `Great. You are all set for ${getReadableDate(callState.serviceDate)} between ${callState.timeWindow}. We look forward to helping with your ${callState.machine.toLowerCase()}. Goodbye.`,
+                token: `Great. You are all set for ${getReadableDate(callState.serviceDate)} between ${callState.timeWindow}. Your confirmation will be sent to that email. We look forward to helping with your ${callState.machine.toLowerCase()}. Goodbye.`,
                 last: true
               }));
               callState.callEnded = true;
