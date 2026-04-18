@@ -1497,28 +1497,19 @@ async function findAvailableSlots(zip, startOffsetDays = 1, maxSlots = 3) {
 
     if ((dayName === 'Friday' || dayName === 'Saturday') && !seenDates.has(serviceDate)) {
       const distancePlan = await buildFridaySaturdayDistancePlan(zip, serviceDate, dayName);
-      if (distancePlan) {
-        const shouldOfferMorning =
-          distancePlan.serviceWindow === routingConfig.fridaySaturdayMorningWindow &&
-          distancePlan.morningOpenSpots > 0;
-        const shouldOfferAfternoon = distancePlan.afternoonOpenSpots > 0;
+      if (distancePlan && results.length < maxSlots) {
+        const targetWindow = distancePlan.serviceWindow;
+        const targetWindowHasCapacity =
+          targetWindow === routingConfig.fridaySaturdayMorningWindow
+            ? distancePlan.morningOpenSpots > 0
+            : distancePlan.afternoonOpenSpots > 0;
 
-        if (shouldOfferMorning && results.length < maxSlots) {
+        if (targetWindowHasCapacity) {
           results.push({
             serviceDate,
             serviceDay: dayName,
             serviceCounty: distancePlan.serviceCounty,
-            serviceWindow: routingConfig.fridaySaturdayMorningWindow,
-            readableDate: getReadableDate(serviceDate)
-          });
-        }
-
-        if (shouldOfferAfternoon && results.length < maxSlots) {
-          results.push({
-            serviceDate,
-            serviceDay: dayName,
-            serviceCounty: distancePlan.serviceCounty,
-            serviceWindow: routingConfig.fridaySaturdayAfternoonWindow,
+            serviceWindow: targetWindow,
             readableDate: getReadableDate(serviceDate)
           });
         }
