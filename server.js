@@ -346,6 +346,86 @@ function normalizeNameText(name) {
     .trim();
 }
 
+function normalizeCityText(city) {
+  return applyLocalCorrections(String(city || ''))
+    .toLowerCase()
+    .replace(/[^a-z\s-]/g, ' ')
+    .replace(/\b(city|town|maryland|md)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractCityFromLocationText(text, zip = '') {
+  let value = applyLocalCorrections(String(text || ''));
+
+  if (zip) {
+    const escapedZip = String(zip).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    value = value.replace(new RegExp(`\\b${escapedZip}\\b`, 'g'), ' ');
+  }
+
+  value = value
+    .replace(/\b(my zip is|zip code is|zip is|zipcode is|i am in|i'm in|in zip|zip code|zipcode|zip|city is|city)\b/gi, ' ')
+    .replace(/\d/g, ' ')
+    .replace(/[^a-zA-Z\s-]/g, ' ')
+    .replace(/\b(maryland|md)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return normalizeCityText(value);
+}
+
+async function validateZipAndCity(zip, city) {
+  if (!zip || !city) {
+    return { ok: false, reason: 'missing' };
+  }
+
+  const place = await getZipPlaceInfo(zip);
+  if (!place || !place.city) {
+    return { ok: false, reason: 'unknown_zip' };
+  }
+
+  const spokenCity = normalizeCityText(city);
+  const expectedCity = normalizeCityText(place.city);
+
+  if (!spokenCity || !expectedCity) {
+    return { ok: false, reason: 'missing' };
+  }
+
+  const matches =
+    spokenCity === expectedCity ||
+    spokenCity.includes(expectedCity) ||
+    expectedCity.includes(spokenCity);
+
+  return {
+    ok: matches,
+    spokenCity,
+    expectedCity,
+    place
+  };
+}
+
+async function extractValidatedZipCityFromSpeech(text) {
+  const raw = String(text || '').trim();
+  const zip = normalizeSpokenDigits(raw).slice(0, 5);
+  const city = extractCityFromLocationText(raw, zip);
+
+  if (!zip || !city) {
+    return { ok: false, zip, city, reason: 'missing' };
+  }
+
+  const validation = await validateZipAndCity(zip, city);
+  if (!validation.ok) {
+    return { ok: false, zip, city, reason: validation.reason, expectedCity: validation.expectedCity || '' };
+  }
+
+  return {
+    ok: true,
+    zip,
+    city: validation.expectedCity,
+    place: validation.place
+  };
+}
+
 function normalizeEmailSpeech(text) {
   let email = String(text || '').trim().toLowerCase();
 
@@ -1710,10 +1790,10 @@ app.post('/scheduleDecision', wrapRoute((req, res) => {
   if (wantsAppointment) {
     res.send(`
 <Response>
-  <Gather input="dtmf" numDigits="5" action="${xmlEscape(zipUrl)}" method="POST" timeout="10">
-    ${say("Please enter your five digit zip code.")}
+  <Gather input="speech" action="${xmlEscape(zipUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("Please say your five digit zip code and city together. For example, 2 1 1 4 4 Severn.")}
   </Gather>
-  ${say("We did not receive your zip code. Goodbye.")}
+  ${say("We did not receive your ZIP code and city. Goodbye.")}
 </Response>
 `.trim());
     return;
@@ -1733,16 +1813,36 @@ app.post('/scheduleDecision', wrapRoute((req, res) => {
 app.post('/getZipForAppointment', wrapRoute(async (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
-  const zip = (req.body.Digits || '').slice(0, 5);
-
-  const slots = await findAvailableSlots(zip, 1, 7);
+  const spokenLocation = String(req.body.SpeechResult || '').trim();
+  const zipCity = await extractValidatedZipCityFromSpeech(spokenLocation);
 
   res.type('text/xml');
+
+  if (!zipCity.ok) {
+    const retryUrl = absoluteUrl(
+      req,
+      `/getZipForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}`
+    );
+
+    res.send(`
+<Response>
+  <Gather input="speech" action="${xmlEscape(retryUrl)}" method="POST" speechTimeout="auto" timeout="10">
+    ${say("I need both the five digit ZIP code and the city together. Please say them again. For example, 2 1 1 4 4 Severn.")}
+  </Gather>
+  ${say("We did not receive your ZIP code and city. Goodbye.")}
+</Response>
+`.trim());
+    return;
+  }
+
+  const zip = zipCity.zip;
+  const city = zipCity.city;
+  const slots = await findAvailableSlots(zip, 1, 7);
 
   if (!slots.length) {
     res.send(`
 <Response>
-  ${say(`Sorry, ${digitsToWords(zip)} is not in our service area or there are no available appointments right now.`)}
+  ${say(`Sorry, ${digitsToWords(zip)} in ${city} is not in our service area or there are no available appointments right now.`)}
   ${say("Please call again if you need anything else. Goodbye.")}
 </Response>
 `.trim());
@@ -1752,12 +1852,12 @@ app.post('/getZipForAppointment', wrapRoute(async (req, res) => {
   const speech = buildAvailabilitySpeech(slots);
   const selectUrl = absoluteUrl(
     req,
-    `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=1`
+    `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&city=${encodeURIComponent(city)}&startOffset=1`
   );
 
   res.send(`
 <Response>
-  ${say(`Thanks. ${digitsToWords(zip)} is in our service area.`)}
+  ${say(`Thanks. ${digitsToWords(zip)} in ${city} is in our service area.`)}
   ${pause(1)}
   ${say(speech)}
   <Gather input="speech" action="${xmlEscape(selectUrl)}" method="POST" speechTimeout="auto">
@@ -1772,6 +1872,7 @@ app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
+  const city = req.query.city || '';
   const currentStartOffset = parseInt(req.query.startOffset || '1', 10);
 
   const speechText = req.body.SpeechResult || '';
@@ -1785,7 +1886,7 @@ app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
     if (!futureSlots.length) {
       const retryUrl = absoluteUrl(
         req,
-        `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=${encodeURIComponent(currentStartOffset)}`
+        `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&city=${encodeURIComponent(city)}&startOffset=${encodeURIComponent(currentStartOffset)}`
       );
 
       res.send(`
@@ -1803,7 +1904,7 @@ app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
     const futureSpeech = buildOptionSpeech(futureSlots);
     const futureUrl = absoluteUrl(
       req,
-      `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=${encodeURIComponent(futureOffset)}`
+      `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&city=${encodeURIComponent(city)}&startOffset=${encodeURIComponent(futureOffset)}`
     );
 
     res.send(`
@@ -1824,7 +1925,7 @@ app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
   if (!chosenSlot) {
     const retryUrl = absoluteUrl(
       req,
-      `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=${encodeURIComponent(currentStartOffset)}`
+      `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&city=${encodeURIComponent(city)}&startOffset=${encodeURIComponent(currentStartOffset)}`
     );
 
     res.send(`
@@ -1841,7 +1942,7 @@ app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
   if (!chosenSlot) {
     const retryUrl = absoluteUrl(
       req,
-      `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&startOffset=${encodeURIComponent(currentStartOffset)}`
+      `/selectAppointmentOption?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&city=${encodeURIComponent(city)}&startOffset=${encodeURIComponent(currentStartOffset)}`
     );
 
     res.send(`
@@ -1858,7 +1959,7 @@ app.post('/selectAppointmentOption', wrapRoute(async (req, res) => {
 
   const nameUrl = absoluteUrl(
     req,
-    `/getNameForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(chosenSlot.serviceDate)}&serviceDay=${encodeURIComponent(chosenSlot.serviceDay)}&serviceCounty=${encodeURIComponent(chosenSlot.serviceCounty)}&serviceWindow=${encodeURIComponent(chosenSlot.serviceWindow)}`
+    `/getNameForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&city=${encodeURIComponent(city)}&serviceDate=${encodeURIComponent(chosenSlot.serviceDate)}&serviceDay=${encodeURIComponent(chosenSlot.serviceDay)}&serviceCounty=${encodeURIComponent(chosenSlot.serviceCounty)}&serviceWindow=${encodeURIComponent(chosenSlot.serviceWindow)}`
   );
 
   res.send(`
@@ -1878,6 +1979,7 @@ app.post('/getNameForAppointment', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
+  const city = req.query.city || '';
   const serviceDate = req.query.serviceDate || '';
   const serviceDay = req.query.serviceDay || '';
   const serviceCounty = req.query.serviceCounty || '';
@@ -1886,7 +1988,7 @@ app.post('/getNameForAppointment', wrapRoute((req, res) => {
 
   const phoneUrl = absoluteUrl(
     req,
-    `/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}`
+    `/getPhoneForAppointment?machine=${encodeURIComponent(machine)}&issue=${encodeURIComponent(issue)}&zip=${encodeURIComponent(zip)}&city=${encodeURIComponent(city)}&serviceDate=${encodeURIComponent(serviceDate)}&serviceDay=${encodeURIComponent(serviceDay)}&serviceCounty=${encodeURIComponent(serviceCounty)}&serviceWindow=${encodeURIComponent(serviceWindow)}&name=${encodeURIComponent(name)}`
   );
 
   res.type('text/xml');
@@ -1907,6 +2009,7 @@ app.post('/getPhoneForAppointment', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
+  const city = req.query.city || '';
   const serviceDate = req.query.serviceDate || '';
   const serviceDay = req.query.serviceDay || '';
   const serviceCounty = req.query.serviceCounty || '';
@@ -1958,6 +2061,7 @@ app.post('/confirmPhoneForAppointment', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
+  const city = req.query.city || '';
   const serviceDate = req.query.serviceDate || '';
   const serviceDay = req.query.serviceDay || '';
   const serviceCounty = req.query.serviceCounty || '';
@@ -2342,8 +2446,8 @@ app.post('/correctAppointmentIssue', wrapRoute((req, res) => {
   );
 }));
 
-// ===== EMAIL CAPTURE FOR APPOINTMENTS (GPT-routed) =====
-app.post('/getEmailForAppointment', wrapRoute(async (req, res) => {
+// ===== EMAIL CAPTURE FOR APPOINTMENTS =====
+app.post('/getEmailForAppointment', wrapRoute((req, res) => {
   const machine = req.query.machine || 'Unknown';
   const issue = req.query.issue || 'Unknown';
   const zip = req.query.zip || 'Unknown';
@@ -2354,8 +2458,7 @@ app.post('/getEmailForAppointment', wrapRoute(async (req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
   const address = req.query.address || '';
-  const rawSpeech = String(req.body.SpeechResult || '').trim();
-  const email = await extractEmailViaGPT(rawSpeech, name);
+  const email = extractEmailFromSpeech(req);
 
   const sameUrl = absoluteUrl(
     req,
@@ -3136,7 +3239,7 @@ function detectYesNoText(text) {
 wss.on('connection', (ws, req) => {
   console.log('ConversationRelay connected');
   const callState = {
-    machine: '', issue: '', zip: '', awaitingZipConfirmation: false,
+    machine: '', issue: '', zip: '', city: '', awaitingZipConfirmation: false,
     zipConfirmed: false, serviceable: false, askedForSchedule: false, inScheduling: false,
     offeredSlots: [], selectedSlot: null, selectedDay: null, dayConfirmed: false,
     timeWindow: '', serviceDate: '', callerName: '', phone: null,
@@ -3164,7 +3267,9 @@ wss.on('connection', (ws, req) => {
           // Only runs before ZIP is confirmed and before booking is in progress
           if (!callState.zipConfirmed && !callState.callerName && !callState.phone) {
             const possibleZip = normalizeSpokenDigits(text).slice(0, 5);
+            const possibleCity = extractCityFromLocationText(userText, possibleZip);
             const hasZip = possibleZip.length === 5;
+            const hasCity = !!possibleCity;
             const isAreaQuestion =
               text.includes('service zip') ||
               text.includes('cover zip') ||
@@ -3179,40 +3284,44 @@ wss.on('connection', (ws, req) => {
               (text.includes('do you service') || text.includes('do you cover')) &&
               !hasMachineKeyword;
 
-            if (hasZip || isAreaQuestion || (isServiceQuestion && !hasZip)) {
-              if (hasZip) {
-                callState.zip = possibleZip;
-                const matchingCounties = getCountyForZip(callState.zip);
-                const recognizedZip = matchingCounties.length > 0;
-                if (recognizedZip) {
-                  callState.zipConfirmed = true;
-                  callState.serviceable = true;
-                  callState.awaitingZipConfirmation = false;
-                  if (callState.inScheduling) {
-                    // Already said yes to scheduling — skip asking again, go straight to slots
-                    const slots = await findAvailableSlots(callState.zip, 1, 7);
-                    callState.offeredSlots = slots;
-                    const avail = slots.length
-                      ? `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`
-                      : 'We service that area, but there are no available appointments right now. Please call back soon.';
-                    ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
-                  } else if (callState.machine && callState.issue) {
-                    ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. Do you want to get something scheduled?', last: true }));
-                    callState.askedForSchedule = true;
-                  } else if (callState.machine) {
-                    ws.send(JSON.stringify({ type: 'text', token: `Yeah, we do service that area. What's going on with your ${callState.machine.toLowerCase()}?`, last: true }));
-                  } else {
-                    ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. What kind of equipment do you need help with?', last: true }));
+            if ((hasZip && hasCity) || isAreaQuestion || isServiceQuestion || hasZip || hasCity) {
+              if (hasZip && hasCity) {
+                const zipCity = await extractValidatedZipCityFromSpeech(userText);
+                if (zipCity.ok) {
+                  callState.zip = zipCity.zip;
+                  callState.city = zipCity.city;
+                  const matchingCounties = getCountyForZip(callState.zip);
+                  const recognizedZip = matchingCounties.length > 0;
+                  if (recognizedZip) {
+                    callState.zipConfirmed = true;
+                    callState.serviceable = true;
+                    callState.awaitingZipConfirmation = false;
+                    if (callState.inScheduling) {
+                      const slots = await findAvailableSlots(callState.zip, 1, 7);
+                      callState.offeredSlots = slots;
+                      const avail = slots.length
+                        ? `Great, we do service ${zipCity.city}. ${buildAvailabilitySpeech(slots)}`
+                        : 'We service that area, but there are no available appointments right now. Please call back soon.';
+                      ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
+                    } else if (callState.machine && callState.issue) {
+                      ws.send(JSON.stringify({ type: 'text', token: `Yeah, we do service ${zipCity.city}. Do you want to get something scheduled?`, last: true }));
+                      callState.askedForSchedule = true;
+                    } else if (callState.machine) {
+                      ws.send(JSON.stringify({ type: 'text', token: `Yeah, we do service ${zipCity.city}. What's going on with your ${callState.machine.toLowerCase()}?`, last: true }));
+                    } else {
+                      ws.send(JSON.stringify({ type: 'text', token: `Yeah, we do service ${zipCity.city}. What kind of equipment do you need help with?`, last: true }));
+                    }
+                    break;
                   }
+                  ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that ZIP code area. Goodbye.", last: true }));
+                  callState.callEnded = true;
+                  setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
                   break;
                 }
-                ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that ZIP code area. Goodbye.", last: true }));
-                callState.callEnded = true;
-                setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
+                ws.send(JSON.stringify({ type: 'text', token: `I need both the five digit ZIP code and the city together. Please say them again, like 2 1 1 4 4 Severn.`, last: true }));
                 break;
               }
-              // Area question with no ZIP — ask for it
-              ws.send(JSON.stringify({ type: 'text', token: 'What ZIP code are you in?', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'What ZIP code and city are you in?', last: true }));
               break;
             }
           }
@@ -3287,31 +3396,36 @@ wss.on('connection', (ws, req) => {
               callState.awaitingZipConfirmation = false;
               callState.zipConfirmed = true;
               if (callState.serviceable) {
-                // Already confirmed serviceable — skip re-check, go straight to slots
                 const slots = await findAvailableSlots(callState.zip, 1, 7);
                 callState.offeredSlots = slots;
                 reply = slots.length
-                  ? `Great. ${buildAvailabilitySpeech(slots)}`
+                  ? `Great. We service ${callState.city || 'that area'}. ${buildAvailabilitySpeech(slots)}`
                   : 'We service that area, but there are no available appointments right now. Please call back soon.';
               } else {
+                const zipCity = await validateZipAndCity(callState.zip, callState.city);
                 const counties = getCountyForZip(callState.zip);
-                if (!counties.length) {
-                  reply = `Sorry, we do not service zip code ${callState.zip}. Please call back if you need anything else.`;
+                if (!counties.length || !zipCity.ok) {
+                  reply = `Sorry, I need the ZIP code and city together. Please say them again.`;
+                  callState.zipConfirmed = false;
+                  callState.zip = '';
+                  callState.city = '';
                 } else {
                   callState.serviceable = true;
+                  callState.city = zipCity.expectedCity || callState.city;
                   const slots = await findAvailableSlots(callState.zip, 1, 7);
                   callState.offeredSlots = slots;
                   reply = slots.length
-                    ? `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`
+                    ? `Great, we do service ${callState.city}. ${buildAvailabilitySpeech(slots)}`
                     : 'We service that area, but there are no available appointments right now. Please call back soon.';
                 }
               }
             } else if (dec === 'no') {
               callState.awaitingZipConfirmation = false;
               callState.zip = '';
-              reply = 'Okay. What is your five digit zip code?';
+              callState.city = '';
+              reply = 'Okay. What ZIP code and city are you in?';
             } else {
-              reply = `I heard zip code ${callState.zip}. Is that correct?`;
+              reply = `I heard zip code ${callState.zip} in ${callState.city}. Is that correct?`;
             }
             ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
             break;
@@ -3363,135 +3477,121 @@ wss.on('connection', (ws, req) => {
                   if (hasSymptom || isNoStart) {
                     callState.issue = userText.trim();
                     if (isNoStart) callState.issueNeedsLastStarted = true;
+                  } else {
+                    // Save as pending in case caller gave generic issue before machine name
+                    callState.pendingIssue = userText.trim();
+                    callState.pendingIssueNeedsLastStarted = isNoStart;
                   }
                 }
               }
-            } else {
-              // No machine detected — check if caller gave issue info, save it for later
-              const hasSymptom = config.symptomKeywords.some(kw => cleaned.includes(kw));
-              const isNoStart =
-                cleaned.includes("won't start") || cleaned.includes('wont start') ||
-                cleaned.includes('will not start') || cleaned.includes('not starting') ||
-                cleaned.includes('no start');
-              if ((hasSymptom || isNoStart) && !callState.pendingIssue) {
-                callState.pendingIssue = userText.trim();
-                if (isNoStart) callState.pendingIssueNeedsLastStarted = true;
-              }
-            }
-          }
-          if (!callState.machine) {
-            ws.send(JSON.stringify({ type: 'text', token: 'What type of machine do you need help with?', last: true }));
-            break;
-          }
-
-          if (!callState.issue) {
-            const machineWords = config.machineOnlyWords;
-            const isMachineOnly =
-              machineWords.includes(cleaned) || cleaned === cleanText(callState.machine);
-            const possibleZip = normalizeSpokenDigits(userText).slice(0, 5);
-
-            if (!isMachineOnly && possibleZip.length !== 5) {
-              const hasSymptom = config.symptomKeywords.some(kw => cleaned.includes(kw));
-
-              const vaguePhrase =
-                config.vagueIssuePhrases.some(vp => cleaned.includes(vp)) ||
-                cleaned === 'not working' ||
-                cleaned === 'needs fixed' ||
-                cleaned === 'needs repair' ||
-                cleaned === 'broken' ||
-                (cleaned.split(' ').length <= 3 && !hasSymptom);
-
-              const isNoStartIssue =
-                cleaned.includes("won't start") ||
-                cleaned.includes('wont start') ||
-                cleaned.includes('will not start') ||
-                cleaned.includes('not starting') ||
-                cleaned.includes('no start') ||
-                cleaned.includes('won\'t start');
-
-              const mentionsTuneUp =
-                cleaned.includes('tune up') ||
-                cleaned.includes('tune-up') ||
-                cleaned.includes('tuneup');
-
-              if (vaguePhrase) {
-                ws.send(JSON.stringify({
-                  type: 'text',
-                  token: 'Got it — what is it doing or not doing?',
-                  last: true
-                }));
-                break;
-              }
-
-              if (hasSymptom || isNoStartIssue) {
-                callState.issue = userText.trim();
-
-                if (isNoStartIssue) {
-                  callState.issueNeedsLastStarted = true;
-
-                  if (mentionsTuneUp) {
-                    callState.issueNeedsTuneUpClarification = true;
-                  }
-                }
-              }
+              console.log('[CALLSTATE] machine set to:', callState.machine, '| issue:', callState.issue, '| pendingIssue:', callState.pendingIssue, '| issueNeedsLastStarted:', callState.issueNeedsLastStarted);
             }
           }
 
-          // Still no issue? Ask once.
+          // --- Issue ---
           if (!callState.issue) {
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: `What seems to be the issue with your ${callState.machine.toLowerCase()}?`,
-              last: true
-            }));
-            break;
+            const lowerUser = cleaned;
+
+            const hasSymptomKeyword = config.symptomKeywords.some(kw => lowerUser.includes(kw));
+            const hasVagueIssue = config.vagueIssuePhrases.some(p => lowerUser.includes(p));
+            const machineOnly = (config.machineOnlyWords || []).some(w => lowerUser === w || lowerUser.replace(/\s+/g,' ').trim() === w);
+
+            const wantsTuneUpButBroken =
+              (lowerUser.includes('tune up') || lowerUser.includes('tuneup')) &&
+              (lowerUser.includes("won't start") || lowerUser.includes('wont start') || lowerUser.includes('not starting') || lowerUser.includes('no start') || lowerUser.includes('shut off') || lowerUser.includes('stall') || lowerUser.includes('dies'));
+
+            if (wantsTuneUpButBroken) {
+              callState.issue = userText.trim();
+              callState.issueNeedsTuneUpClarification = true;
+              console.log('[CALLSTATE] tune-up misconception captured:', callState.issue);
+            } else if (!machineOnly && !hasVagueIssue && hasSymptomKeyword) {
+              callState.issue = userText.trim();
+              if (isNoStartIssue) callState.issueNeedsLastStarted = true;
+              console.log('[CALLSTATE] issue captured:', callState.issue, '| issueNeedsLastStarted:', callState.issueNeedsLastStarted);
+            }
           }
 
-          // --- Tune-up clarification for no-start ---
+          // --- Tune-up misconception follow-up ---
           if (callState.issueNeedsTuneUpClarification && !callState.gaveTuneUpClarification) {
             callState.gaveTuneUpClarification = true;
             ws.send(JSON.stringify({
               type: 'text',
-              token: 'Got it — if it is not starting, a tune-up may not fix it by itself. We may need to diagnose it first. When was the last time it started?',
+              token: "If it won't start, it probably needs more than just a tune-up. When was the last time it ran?",
               last: true
             }));
-            callState.askedLastStarted = true;
             break;
           }
 
-          // --- No-start follow-up before scheduling / ZIP ---
+          // --- Last-started follow-up for no-start issues ---
           if (callState.issueNeedsLastStarted && !callState.askedLastStarted) {
             callState.askedLastStarted = true;
             ws.send(JSON.stringify({
               type: 'text',
-              token: `Got it — ${callState.machine.toLowerCase()} not starting. When was the last time it started?`,
+              token: 'When was the last time it started?',
               last: true
             }));
             break;
           }
 
-          if (callState.issueNeedsLastStarted && callState.askedLastStarted && !callState.lastStartedAnswer) {
+          // --- Capture answer to last-started ---
+          if (callState.askedLastStarted && !callState.lastStartedAnswer) {
             callState.lastStartedAnswer = userText.trim();
-            callState.issue = `${callState.issue} | Last started: ${callState.lastStartedAnswer}`;
+            console.log('[CALLSTATE] lastStartedAnswer:', callState.lastStartedAnswer);
+            if (!callState.askedForSchedule) {
+              callState.askedForSchedule = true;
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'Would you like to schedule an appointment?',
+                last: true
+              }));
+            }
+            break;
+          }
+
+          // --- ZIP/service-area question mid-conversation ---
+          const isAskingServiceArea =
+            text.includes('do you service my area') ||
+            text.includes('do you service that area') ||
+            text.includes('do you cover my area') ||
+            text.includes('what area do you cover') ||
+            text.includes('what areas do you cover') ||
+            text.includes('do you service zip code') ||
+            text.includes('do you cover zip code') ||
+            text.includes('is that in your service area');
+
+          if (isAskingServiceArea && !callState.zipConfirmed) {
+            const possibleZip = normalizeSpokenDigits(userText).slice(0, 5);
+            if (possibleZip.length === 5) {
+              callState.zip = possibleZip;
+              callState.awaitingZipConfirmation = true;
+              ws.send(JSON.stringify({ type: 'text', token: `I heard zip code ${callState.zip}. Is that correct?`, last: true }));
+              break;
+            }
+            ws.send(JSON.stringify({ type: 'text', token: 'What ZIP code are you in?', last: true }));
+            break;
+          }
+
+          // --- Ask one useful follow-up instead of repeating machine/issue ---
+          if (callState.machine && !callState.issue) {
             ws.send(JSON.stringify({
               type: 'text',
-              token: 'Would you like to schedule an appointment?',
+              token: `Got it — ${callState.machine.toLowerCase()}. What's it doing or not doing?`,
               last: true
             }));
-            callState.askedForSchedule = true;
             break;
           }
 
-          // --- Ask to schedule before ZIP ---
-          if (
-            !callState.issueNeedsLastStarted &&
-            !callState.askedForSchedule &&
-            !callState.inScheduling &&
-            !callState.selectedDay &&
-            !callState.dayConfirmed &&
-            !callState.booked &&
-            !callState.offeredSlots.length
-          ) {
+          if (!callState.machine) {
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: 'What kind of equipment do you need help with?',
+              last: true
+            }));
+            break;
+          }
+
+          // --- Ask to schedule after machine + issue are known ---
+          if (callState.machine && callState.issue && !callState.askedForSchedule && !callState.inScheduling) {
             callState.askedForSchedule = true;
             ws.send(JSON.stringify({
               type: 'text',
@@ -3501,43 +3601,50 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
-          if (callState.askedForSchedule) {
-            const wants = cleaned.includes('yes') || cleaned.includes('schedule') || cleaned.includes('book') || cleaned.includes('appointment');
-            if (wants) {
-              callState.askedForSchedule = false;
+          // --- Customer wants scheduling ---
+          if (callState.askedForSchedule && !callState.inScheduling) {
+            const yesWords = ['yes', 'yeah', 'yep', 'schedule', 'set it up', 'book it', 'book', 'let us schedule'];
+            const noWords = ['no', 'not right now', 'just calling', 'just checking', 'maybe later'];
+
+            if (yesWords.some(w => text.includes(w))) {
               callState.inScheduling = true;
-              if (callState.zipConfirmed && callState.zip) {
+              if (callState.zipConfirmed) {
                 const slots = await findAvailableSlots(callState.zip, 1, 7);
                 callState.offeredSlots = slots;
-                if (!slots.length) {
-                  reply = 'Sorry, there are no available appointments right now. Please call back soon.';
-                } else {
-                  reply = buildAvailabilitySpeech(slots);
-                }
-                ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
-                break;
+                reply = slots.length
+                  ? buildAvailabilitySpeech(slots)
+                  : 'Sorry, there are no available appointments right now. Please call back soon.';
+              } else {
+                reply = 'What ZIP code and city are you in?';
               }
-              ws.send(JSON.stringify({ type: 'text', token: "What's your ZIP code?", last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
               break;
             }
-            callState.askedForSchedule = false;
-            reply = 'Alright, no problem.';
-            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
-            break;
+
+            if (noWords.some(w => text.includes(w))) {
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'No problem. If you want, I can still take down your information and someone can follow up with you.',
+                last: true
+              }));
+              callState.callEnded = true;
+              setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
+              break;
+            }
           }
 
-          // --- ZIP capture ---
+          // --- Collect ZIP once customer wants scheduling ---
           if (callState.inScheduling && !callState.zipConfirmed) {
-            const possibleZip = normalizeSpokenDigits(userText).slice(0,5);
-            if (!callState.zip && possibleZip.length === 5) {
-              callState.zip = possibleZip;
+            const zipCity = await extractValidatedZipCityFromSpeech(userText);
+            if (zipCity.ok) {
+              callState.zip = zipCity.zip;
+              callState.city = zipCity.city;
               callState.awaitingZipConfirmation = true;
-              reply = `I heard zip code ${callState.zip}. Is that correct?`;
-            } else if (!callState.zip) {
-              reply = 'What is your five digit zip code?';
+              reply = `I heard zip code ${callState.zip} in ${callState.city}. Is that correct?`;
             } else {
-              callState.awaitingZipConfirmation = true;
-              reply = `I heard zip code ${callState.zip}. Is that correct?`;
+              callState.zip = '';
+              callState.city = '';
+              reply = 'Please say the five digit ZIP code and the city together, like 2 1 1 4 4 Severn.';
             }
             ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
             break;
@@ -3556,210 +3663,235 @@ wss.on('connection', (ws, req) => {
             break;
           }
 
-          // --- Day/slot selection ---
-          if (callState.inScheduling && !callState.dayConfirmed) {
-            let matchedSlot = null;
-            const speech = userText.toLowerCase();
-            const isMorningSpeech = speech.includes('morning') || speech.includes('am') || speech.includes('a.m');
-            const isAfternoonSpeech = speech.includes('afternoon') || speech.includes('pm') || speech.includes('p.m') || speech.includes('after');
-            for (const slot of callState.offeredSlots) {
-              const day = slot.serviceDay.toLowerCase();
-              const slotDate = new Date(`${slot.serviceDate}T12:00:00`);
-              const month = slotDate.toLocaleDateString('en-US', { month: 'long' }).toLowerCase();
-              const dayNum = String(slotDate.getDate());
-              const isMorning = slot.serviceWindow === '10:00 to 12:00';
-              const isAfternoon = slot.serviceWindow === '1:00 to 4:00';
-              if (speech.includes(day) && slot.serviceWindow === '10:00 to 10:30') { matchedSlot = slot; break; }
-              if (speech.includes(day) && isMorning && isMorningSpeech) { matchedSlot = slot; break; }
-              if (speech.includes(day) && isAfternoon && isAfternoonSpeech) { matchedSlot = slot; break; }
-              if (speech.includes(month) && speech.includes(dayNum)) { matchedSlot = slot; break; }
-            }
-            // If caller said just "Friday" or "Saturday" with no morning/afternoon qualifier
-            if (!matchedSlot && !isMorningSpeech && !isAfternoonSpeech) {
-              const daySlots = callState.offeredSlots.filter(s => speech.includes(s.serviceDay.toLowerCase()));
-              if (daySlots.length === 1) {
-                matchedSlot = daySlots[0];
-              } else if (daySlots.length > 1) {
-                const dayName = daySlots[0].serviceDay;
-                ws.send(JSON.stringify({ type: 'text', token: `Would you like ${dayName} morning or afternoon?`, last: true }));
-                break;
-              }
-            }
-            if (matchedSlot) {
-              callState.selectedDay = matchedSlot.serviceDay;
-              callState.serviceDate = matchedSlot.serviceDate;
-              callState.timeWindow = matchedSlot.serviceWindow;
-              callState.inScheduling = false;
-              let win;
-              if (matchedSlot.serviceWindow === '10:00 to 10:30') win = 'ten to ten thirty in the morning';
-              else if (matchedSlot.serviceWindow === '10:00 to 12:00') win = 'morning between ten and noon';
-              else if (matchedSlot.serviceWindow === '1:00 to 4:00') win = 'afternoon between one and four';
-              else win = matchedSlot.serviceWindow;
-              ws.send(JSON.stringify({ type: 'text', token: `Got it, ${matchedSlot.readableDate}, ${win}. Does that sound right?`, last: true }));
+          // --- Slot selection (natural) ---
+          if (callState.inScheduling && callState.offeredSlots.length && !callState.selectedSlot) {
+            const tempReq = { body: { SpeechResult: userText, Digits: '' } };
+            const chosen = detectNaturalSlot(tempReq, callState.offeredSlots);
+
+            if (!chosen) {
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'Please say the day, the date, or Friday or Saturday morning or afternoon.',
+                last: true
+              }));
               break;
             }
-            ws.send(JSON.stringify({ type: 'text', token: 'Please say the day, the date, or Friday or Saturday morning or afternoon.', last: true }));
-            break;
-          }
 
-          // --- Confirm day yes/no ---
-          if (callState.selectedDay && !callState.dayConfirmed) {
-            if (text.includes('yes') || text.includes('correct') || text.includes('sounds right') || text.includes('that works')) {
-              callState.dayConfirmed = true;
-              ws.send(JSON.stringify({ type: 'text', token: 'Can I get your first and last name please?', last: true }));
-            } else if (text.includes('no')) {
-              callState.selectedDay = null;
-              callState.serviceDate = '';
-              callState.timeWindow = '';
-              ws.send(JSON.stringify({ type: 'text', token: 'No problem. Which option would you like instead?', last: true }));
-            } else {
-              let win;
-              if (callState.timeWindow === '10:00 to 10:30') win = 'ten to ten thirty in the morning';
-              else if (callState.timeWindow === '10:00 to 12:00') win = 'morning between ten and noon';
-              else if (callState.timeWindow === '1:00 to 4:00') win = 'afternoon between one and four';
-              else win = callState.timeWindow;
-              ws.send(JSON.stringify({ type: 'text', token: `Just to confirm, ${getReadableDate(callState.serviceDate)}, ${win}. Does that sound right?`, last: true }));
-            }
+            callState.selectedSlot = chosen;
+            callState.timeWindow = chosen.serviceWindow;
+            callState.serviceDate = chosen.serviceDate;
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: `Okay. I have ${chosen.readableDate} between ${chosen.serviceWindow}. What is your first and last name?`,
+              last: true
+            }));
             break;
           }
 
           // --- Name ---
-          if (callState.dayConfirmed && !callState.callerName) {
-            const rawName = normalizeNameText(userText);
-            if (rawName && rawName.trim().length >= 2 && !/^\d+$/.test(rawName.trim())) {
-              callState.callerName = rawName;
-              ws.send(JSON.stringify({ type: 'text', token: `Got it, ${rawName}. What is the best phone number to reach you at?`, last: true }));
-            } else {
-              ws.send(JSON.stringify({ type: 'text', token: 'Can I get your first and last name please?', last: true }));
-            }
+          if (callState.selectedSlot && !callState.callerName) {
+            callState.callerName = normalizeNameText(userText);
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: `Thanks ${callState.callerName}. What is the best phone number to reach you?`,
+              last: true
+            }));
             break;
           }
 
           // --- Phone ---
           if (callState.callerName && !callState.phone) {
-            const digits = normalizeTenDigitPhone(normalizeSpokenDigits(userText));
-            if (digits.length === 10) {
-              callState.phone = digits;
-              const spk = digits.slice(0,3).split('').join(' ') + ', ' + digits.slice(3,6).split('').join(' ') + ', ' + digits.slice(6).split('').join(' ');
-              ws.send(JSON.stringify({ type: 'text', token: `I have ${spk}. Is that correct?`, last: true }));
-            } else {
-              ws.send(JSON.stringify({ type: 'text', token: 'What is the best phone number to reach you at?', last: true }));
+            const phone = normalizeTenDigitPhone(normalizeSpokenDigits(userText));
+            if (!phone) {
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'I did not get the phone number. Please say it again.',
+                last: true
+              }));
+              break;
             }
+            callState.phone = phone;
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: `I heard ${digitsToWords(phone)}. Is that correct?`,
+              last: true
+            }));
+            callState.phoneConfirmed = false;
             break;
           }
 
-          // --- Confirm phone ---
           if (callState.phone && !callState.phoneConfirmed) {
-            if (text.includes('yes') || text.includes('correct')) {
+            const dec = detectYesNoText(userText);
+            if (dec === 'yes') {
               callState.phoneConfirmed = true;
-              ws.send(JSON.stringify({ type: 'text', token: 'What is the service address?', last: true }));
-            } else {
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'What is the service address?',
+                last: true
+              }));
+            } else if (dec === 'no') {
               callState.phone = null;
-              ws.send(JSON.stringify({ type: 'text', token: 'Okay. What is the correct phone number?', last: true }));
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'Okay. What is the best phone number to reach you?',
+                last: true
+              }));
+            } else {
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: `I heard ${digitsToWords(callState.phone)}. Is that correct?`,
+                last: true
+              }));
             }
             break;
           }
 
           // --- Address ---
           if (callState.phoneConfirmed && !callState.address) {
-            const raw = String(userText || '').trim();
-            if (raw.length >= 5) {
-              callState.address = normalizeAddressText(applyLocalCorrections(rejoinSpacedDigits(raw)));
-              const addrSpeak = formatStreetNumberForSpeech(callState.address);
-              ws.send(JSON.stringify({ type: 'text', token: `I have ${addrSpeak}. Is that correct?`, last: true }));
-            } else {
-              ws.send(JSON.stringify({ type: 'text', token: 'What is the service address?', last: true }));
+            callState.address = await normalizeAddressForKnownZip(userText, callState.zip);
+            if (!callState.address) {
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'I did not get the address. Please say the full street address again.',
+                last: true
+              }));
+              break;
             }
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: `I heard ${formatAddressForSpeech(callState.address)}. Is that correct?`,
+              last: true
+            }));
+            callState.addressConfirmed = false;
             break;
           }
 
-          // --- Confirm address ---
           if (callState.address && !callState.addressConfirmed) {
-            if (text.includes('yes') || text.includes('correct')) {
+            const dec = detectYesNoText(userText);
+            if (dec === 'yes') {
               callState.addressConfirmed = true;
-              ws.send(JSON.stringify({ type: 'text', token: 'What email address should we send the confirmation to?', last: true }));
-            } else {
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'What email address would you like us to use for your appointment confirmation?',
+                last: true
+              }));
+            } else if (dec === 'no') {
               callState.address = null;
-              ws.send(JSON.stringify({ type: 'text', token: 'What is the correct service address?', last: true }));
-            }
-            break;
-          }
-
-          // --- Email (GPT-routed) ---
-          if (callState.addressConfirmed && !callState.email) {
-            const rawEmail = await extractEmailViaGPT(userText, callState.callerName);
-            if (rawEmail && rawEmail.includes('@')) {
-              callState.email = rawEmail;
-              ws.send(JSON.stringify({ type: 'text', token: `I have ${formatEmailForSpeech(rawEmail)}. Is that correct?`, last: true }));
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'Okay. What is the service address?',
+                last: true
+              }));
             } else {
-              ws.send(JSON.stringify({ type: 'text', token: 'What email address should we send the confirmation to?', last: true }));
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: `I heard ${formatAddressForSpeech(callState.address)}. Is that correct?`,
+                last: true
+              }));
             }
             break;
           }
 
-          // --- Confirm email + book ---
+          // --- Email ---
+          if (callState.addressConfirmed && !callState.email) {
+            const email = await extractEmailViaGPT(userText, callState.callerName);
+            if (!email) {
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'I did not get the email address clearly. Please say it again.',
+                last: true
+              }));
+              break;
+            }
+            callState.email = email;
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: `I heard ${formatEmailForSpeech(callState.email)}. Is that correct?`,
+              last: true
+            }));
+            callState.emailConfirmed = false;
+            break;
+          }
+
           if (callState.email && !callState.emailConfirmed) {
-            if (text.includes('yes') || text.includes('correct')) {
+            const dec = detectYesNoText(userText);
+            if (dec === 'yes') {
               callState.emailConfirmed = true;
+
+              // Save appointment immediately
               const job = {
                 id: generateJobId(),
                 requestType: 'Appointment Request',
-                name: callState.callerName || 'Phone Caller',
-                machine: callState.machine || 'Unknown',
-                problem: callState.issue || 'Unknown',
-                zip: callState.zip || '',
-                phone: callState.phone || '',
-                address: callState.address || '',
-                email: callState.email || '',
-                serviceDate: callState.serviceDate || '',
-                serviceDay: callState.selectedDay || '',
-                serviceWindow: callState.timeWindow || '',
+                name: callState.callerName,
+                machine: callState.machine,
+                problem: callState.issue,
+                zip: callState.zip,
+                phone: callState.phone,
+                address: callState.address,
+                email: callState.email,
+                serviceDate: callState.serviceDate,
+                serviceDay: getDayNameInEastern(new Date(`${callState.serviceDate}T12:00:00`)),
+                serviceCounty: getCountyForZip(callState.zip)[0] || '',
+                serviceWindow: callState.timeWindow,
+                lastStarted: callState.lastStartedAnswer || '',
                 time: getEasternTimestamp()
               };
+
               saveJob(job);
+              await rebalanceFridaySaturdayJobs(callState.serviceDate);
               try {
                 await sendAppointmentConfirmationEmail({
                   to: callState.email,
-                  name: callState.callerName || 'Customer',
+                  name: callState.callerName,
                   machine: callState.machine,
                   issue: callState.issue,
-                  serviceDate: callState.serviceDate || callState.selectedDay || '',
-                  serviceWindow: callState.timeWindow || '',
+                  serviceDate: callState.serviceDate,
+                  serviceWindow: callState.timeWindow,
                   address: callState.address
                 });
-              } catch (err) { console.error('Email failed:', err); }
-              const readableAppt = callState.serviceDate ? getReadableDate(callState.serviceDate) : callState.selectedDay;
-              ws.send(JSON.stringify({ type: 'text', token: `You are all set, ${callState.callerName}. Your appointment is confirmed for ${readableAppt} between ${callState.timeWindow}. A confirmation is on its way to ${formatEmailForSpeech(callState.email)}. Thank you, goodbye.`, last: true }));
-              callState.booked = true;
+              } catch (e) {
+                console.error('Email send failed:', e);
+              }
+
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: `Great. You are all set for ${getReadableDate(callState.serviceDate)} between ${callState.timeWindow}. We look forward to helping with your ${callState.machine.toLowerCase()}. Goodbye.`,
+                last: true
+              }));
               callState.callEnded = true;
-              setTimeout(() => { try { ws.close(); } catch (e) {} }, 20000);
-            } else {
+              setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
+            } else if (dec === 'no') {
               callState.email = null;
-              ws.send(JSON.stringify({ type: 'text', token: 'What is the correct email address?', last: true }));
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: 'Okay. Please say the email address again.',
+                last: true
+              }));
+            } else {
+              ws.send(JSON.stringify({
+                type: 'text',
+                token: `I heard ${formatEmailForSpeech(callState.email)}. Is that correct?`,
+                last: true
+              }));
             }
             break;
           }
 
-          if (callState.booked) {
-            ws.send(JSON.stringify({ type: 'text', token: 'Your appointment is already confirmed. Have a great day.', last: true }));
-            break;
-          }
-
-          // Fallback to AI
-          const aiReply = await getAIResponse(userText);
-          ws.send(JSON.stringify({ type: 'text', token: aiReply, last: true }));
+          // Fallback
+          ws.send(JSON.stringify({
+            type: 'text',
+            token: "I'm sorry, I didn't catch that. Could you say that again?",
+            last: true
+          }));
           break;
         }
-        case 'interrupt':
-          console.log('Caller interrupted');
-          break;
-        default:
-          console.log('Unhandled event:', data.type);
-          break;
       }
     } catch (err) {
-      console.error('WebSocket error:', err);
+      console.error('ConversationRelay error:', err);
+      try {
+        ws.send(JSON.stringify({ type: 'text', token: 'Sorry, something went wrong on our end. Goodbye.', last: true }));
+        setTimeout(() => { try { ws.close(); } catch (e) {} }, 3000);
+      } catch (e) {}
     }
   });
-  ws.on('close', () => console.log('ConversationRelay disconnected'));
 });
