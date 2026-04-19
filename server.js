@@ -1,4 +1,3 @@
-
 const express = require('express');
 const fs = require('fs');
 const WebSocket = require('ws');
@@ -3330,10 +3329,10 @@ wss.on('connection', (ws, req) => {
                   setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
                   break;
                 }
-                ws.send(JSON.stringify({ type: 'text', token: `I need both the five digit ZIP code and the city together. Please say them again, like 2 1 1 4 4 Severn.`, last: true }));
+                ws.send(JSON.stringify({ type: 'text', token: 'What is your five digit ZIP code?', last: true }));
                 break;
               }
-              ws.send(JSON.stringify({ type: 'text', token: 'What ZIP code and city are you in?', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'What is your five digit ZIP code?', last: true }));
               break;
             }
           }
@@ -3411,23 +3410,18 @@ wss.on('connection', (ws, req) => {
                 const slots = await findAvailableSlots(callState.zip, 1, 7);
                 callState.offeredSlots = slots;
                 reply = slots.length
-                  ? `Great. We service ${callState.city || 'that area'}. ${buildAvailabilitySpeech(slots)}`
+                  ? `Great. ${buildAvailabilitySpeech(slots)}`
                   : 'We service that area, but there are no available appointments right now. Please call back soon.';
               } else {
-                const zipCity = await validateZipAndCity(callState.zip, callState.city);
                 const counties = getCountyForZip(callState.zip);
-                if (!counties.length || !zipCity.ok) {
-                  reply = `Sorry, I need the ZIP code and city together. Please say them again.`;
-                  callState.zipConfirmed = false;
-                  callState.zip = '';
-                  callState.city = '';
+                if (!counties.length) {
+                  reply = `Sorry, we do not service zip code ${callState.zip}. Please call back if you need anything else.`;
                 } else {
                   callState.serviceable = true;
-                  callState.city = zipCity.expectedCity || callState.city;
                   const slots = await findAvailableSlots(callState.zip, 1, 7);
                   callState.offeredSlots = slots;
                   reply = slots.length
-                    ? `Great, we do service ${callState.city}. ${buildAvailabilitySpeech(slots)}`
+                    ? `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`
                     : 'We service that area, but there are no available appointments right now. Please call back soon.';
                 }
               }
@@ -3435,9 +3429,9 @@ wss.on('connection', (ws, req) => {
               callState.awaitingZipConfirmation = false;
               callState.zip = '';
               callState.city = '';
-              reply = 'Okay. What ZIP code and city are you in?';
+              reply = 'Okay. What is your five digit ZIP code?';
             } else {
-              reply = `I heard zip code ${callState.zip} in ${callState.city}. Is that correct?`;
+              reply = `I heard zip code ${callState.zip}. Is that correct?`;
             }
             ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
             break;
@@ -3627,7 +3621,7 @@ wss.on('connection', (ws, req) => {
                   ? buildAvailabilitySpeech(slots)
                   : 'Sorry, there are no available appointments right now. Please call back soon.';
               } else {
-                reply = 'What ZIP code and city are you in?';
+                reply = 'What is your five digit ZIP code?';
               }
               ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
               break;
@@ -3647,16 +3641,13 @@ wss.on('connection', (ws, req) => {
 
           // --- Collect ZIP once customer wants scheduling ---
           if (callState.inScheduling && !callState.zipConfirmed) {
-            const zipCity = await extractValidatedZipCityFromSpeech(userText);
-            if (zipCity.ok) {
-              callState.zip = zipCity.zip;
-              callState.city = zipCity.city;
+            const possibleZip = normalizeSpokenDigits(userText).slice(0, 5);
+            if (possibleZip.length === 5) {
+              callState.zip = possibleZip;
               callState.awaitingZipConfirmation = true;
-              reply = `I heard zip code ${callState.zip} in ${callState.city}. Is that correct?`;
+              reply = `I heard zip code ${callState.zip}. Is that correct?`;
             } else {
-              callState.zip = '';
-              callState.city = '';
-              reply = 'Please say the five digit ZIP code and the city together, like 2 1 1 4 4 Severn.';
+              reply = 'What is your five digit ZIP code?';
             }
             ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
             break;
