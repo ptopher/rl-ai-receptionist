@@ -1477,6 +1477,7 @@ async function buildFridaySaturdayDistancePlan(zip, serviceDate, dayName) {
 
   const tempEntry = enriched.find((item) => item.id === '__temp__');
   const tempDistance = tempEntry ? tempEntry.distance : 0;
+  console.log(`[DISTANCE] zip=${zip} date=${serviceDate} day=${dayName} distance=${tempDistance}mi isFar=${tempDistance > 10}`);
 
   const morningJobs = dayJobs.filter(
     (job) => job.serviceWindow === routingConfig.fridaySaturdayMorningWindow
