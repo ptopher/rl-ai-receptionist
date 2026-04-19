@@ -3670,7 +3670,9 @@ wss.on('connection', (ws, req) => {
           // --- Slot selection (natural) ---
           if (callState.inScheduling && callState.offeredSlots.length && !callState.selectedSlot) {
             const tempReq = { body: { SpeechResult: userText, Digits: '' } };
+            console.log('[SLOTS OFFERED]', JSON.stringify(callState.offeredSlots.map(s => ({ day: s.serviceDay, date: s.serviceDate, window: s.serviceWindow }))));
             const chosen = detectNaturalSlot(tempReq, callState.offeredSlots);
+            console.log('[SLOT CHOSEN]', chosen ? `${chosen.serviceDay} ${chosen.serviceDate} ${chosen.serviceWindow}` : 'null');
 
             if (!chosen) {
               ws.send(JSON.stringify({
