@@ -1267,7 +1267,9 @@ async function getZipPlaceInfo(zip) {
 }
 
 async function normalizeAddressForKnownZip(rawAddress, expectedZip) {
-  const normalized = normalizeAddressText(rawAddress || '');
+  // Rejoin spaced-out digits (e.g. "2 0 7 7 2" → "20772") before normalizing
+  const rejoined = rejoinSpacedDigits(rawAddress || '');
+  const normalized = normalizeAddressText(rejoined);
 
   if (!expectedZip) {
     return normalized;
@@ -3670,9 +3672,7 @@ wss.on('connection', (ws, req) => {
           // --- Slot selection (natural) ---
           if (callState.inScheduling && callState.offeredSlots.length && !callState.selectedSlot) {
             const tempReq = { body: { SpeechResult: userText, Digits: '' } };
-            console.log('[SLOTS OFFERED]', JSON.stringify(callState.offeredSlots.map(s => ({ day: s.serviceDay, date: s.serviceDate, window: s.serviceWindow }))));
             const chosen = detectNaturalSlot(tempReq, callState.offeredSlots);
-            console.log('[SLOT CHOSEN]', chosen ? `${chosen.serviceDay} ${chosen.serviceDate} ${chosen.serviceWindow}` : 'null');
 
             if (!chosen) {
               ws.send(JSON.stringify({
