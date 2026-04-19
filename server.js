@@ -1276,11 +1276,15 @@ async function normalizeAddressForKnownZip(rawAddress, expectedZip) {
   }
 
   const place = await getZipPlaceInfo(expectedZip);
-  const streetOnly = removeKnownLocationSuffix(normalized, place, expectedZip) || removeTrailingZipOnly(normalized, expectedZip) || normalized;
+  let streetOnly = removeKnownLocationSuffix(normalized, place, expectedZip) || removeTrailingZipOnly(normalized, expectedZip) || normalized;
 
   if (!place || !place.city) {
     return `${streetOnly} ${expectedZip}`.replace(/\s+/g, ' ').trim();
   }
+
+  // Strip city name if it already appears in streetOnly (prevents double city)
+  const cityEscaped = place.city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  streetOnly = streetOnly.replace(new RegExp(`\\s*\\b${cityEscaped}\\b\\s*`, 'gi'), ' ').replace(/\s+/g, ' ').trim();
 
   const fullState = place.state || 'Maryland';
   return `${streetOnly} ${place.city} ${fullState} ${expectedZip}`.replace(/\s+/g, ' ').trim();
@@ -3672,7 +3676,9 @@ wss.on('connection', (ws, req) => {
           // --- Slot selection (natural) ---
           if (callState.inScheduling && callState.offeredSlots.length && !callState.selectedSlot) {
             const tempReq = { body: { SpeechResult: userText, Digits: '' } };
+            console.log('[SLOTS OFFERED]', JSON.stringify(callState.offeredSlots.map(s => ({ day: s.serviceDay, date: s.serviceDate, window: s.serviceWindow }))));
             const chosen = detectNaturalSlot(tempReq, callState.offeredSlots);
+            console.log('[SLOT CHOSEN]', chosen ? `${chosen.serviceDay} ${chosen.serviceDate} ${chosen.serviceWindow}` : 'null');
 
             if (!chosen) {
               ws.send(JSON.stringify({
