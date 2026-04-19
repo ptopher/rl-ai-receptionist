@@ -1414,27 +1414,44 @@ async function rebalanceFridaySaturdayJobs(serviceDate) {
 
   if (dayJobs.length === 0) return;
 
+  const FAR_THRESHOLD_MILES = 10;
+
   const enriched = [];
   for (const job of dayJobs) {
     const distance = await getDistanceFromHomeMiles(job.zip);
     enriched.push({ job, distance });
   }
 
-  enriched.sort((a, b) => a.distance - b.distance);
+  // Count how many near vs far jobs there are
+  const nearJobs = enriched.filter(e => e.distance <= FAR_THRESHOLD_MILES);
+  const farJobs = enriched.filter(e => e.distance > FAR_THRESHOLD_MILES);
 
-  for (let i = 0; i < enriched.length; i += 1) {
-    const current = enriched[i].job;
+  // Assign near jobs to morning (up to morningMax), overflow to afternoon
+  // Assign far jobs to afternoon (up to afternoonMax), overflow to morning
+  let morningUsed = 0;
+  let afternoonUsed = 0;
 
-    if (i < routingConfig.fridaySaturdayMorningMax) {
-      current.serviceWindow = routingConfig.fridaySaturdayMorningWindow;
-    } else if (
-      i <
-      routingConfig.fridaySaturdayMorningMax +
-        routingConfig.fridaySaturdayAfternoonMax
-    ) {
-      current.serviceWindow = routingConfig.fridaySaturdayAfternoonWindow;
+  for (const entry of nearJobs) {
+    if (morningUsed < routingConfig.fridaySaturdayMorningMax) {
+      entry.job.serviceWindow = routingConfig.fridaySaturdayMorningWindow;
+      morningUsed++;
+    } else if (afternoonUsed < routingConfig.fridaySaturdayAfternoonMax) {
+      entry.job.serviceWindow = routingConfig.fridaySaturdayAfternoonWindow;
+      afternoonUsed++;
     } else {
-      current.serviceWindow = 'We will contact you to schedule your service window.';
+      entry.job.serviceWindow = 'We will contact you to schedule your service window.';
+    }
+  }
+
+  for (const entry of farJobs) {
+    if (afternoonUsed < routingConfig.fridaySaturdayAfternoonMax) {
+      entry.job.serviceWindow = routingConfig.fridaySaturdayAfternoonWindow;
+      afternoonUsed++;
+    } else if (morningUsed < routingConfig.fridaySaturdayMorningMax) {
+      entry.job.serviceWindow = routingConfig.fridaySaturdayMorningWindow;
+      morningUsed++;
+    } else {
+      entry.job.serviceWindow = 'We will contact you to schedule your service window.';
     }
   }
 
