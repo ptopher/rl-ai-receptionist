@@ -3309,9 +3309,7 @@ wss.on('connection', (ws, req) => {
           // Only runs for actual service-area questions before scheduling starts.
           if (!callState.zipConfirmed && !callState.callerName && !callState.phone && !callState.inScheduling) {
             const possibleZip = normalizeSpokenDigits(text).slice(0, 5);
-            const possibleCity = extractCityFromLocationText(userText, possibleZip);
             const hasZip = possibleZip.length === 5;
-            const hasCity = !!possibleCity;
             const isAreaQuestion =
               text.includes('service zip') ||
               text.includes('cover zip') ||
@@ -3327,33 +3325,34 @@ wss.on('connection', (ws, req) => {
               !hasMachineKeyword;
 
             if (isAreaQuestion || isServiceQuestion) {
-              if (hasZip && hasCity) {
-                const zipCity = await extractValidatedZipCityFromSpeech(userText);
-                if (zipCity.ok) {
-                  callState.zip = zipCity.zip;
-                  callState.city = zipCity.city;
-                  const matchingCounties = getCountyForZip(callState.zip);
-                  const recognizedZip = matchingCounties.length > 0;
-                  if (recognizedZip) {
-                    callState.zipConfirmed = true;
-                    callState.serviceable = true;
-                    callState.awaitingZipConfirmation = false;
-                    if (callState.machine && callState.issue) {
-                      ws.send(JSON.stringify({ type: 'text', token: `Yeah, we do service ${zipCity.city}. Do you want to get something scheduled?`, last: true }));
-                      callState.askedForSchedule = true;
-                    } else if (callState.machine) {
-                      ws.send(JSON.stringify({ type: 'text', token: `Yeah, we do service ${zipCity.city}. What's going on with your ${callState.machine.toLowerCase()}?`, last: true }));
-                    } else {
-                      ws.send(JSON.stringify({ type: 'text', token: `Yeah, we do service ${zipCity.city}. What kind of equipment do you need help with?`, last: true }));
-                    }
-                    break;
+              if (hasZip) {
+                callState.zip = possibleZip;
+                const matchingCounties = getCountyForZip(callState.zip);
+                const recognizedZip = matchingCounties.length > 0;
+                if (recognizedZip) {
+                  callState.zipConfirmed = true;
+                  callState.serviceable = true;
+                  callState.awaitingZipConfirmation = false;
+                  if (callState.inScheduling) {
+                    const slots = await findAvailableSlots(callState.zip, 1, 7);
+                    callState.offeredSlots = slots;
+                    const avail = slots.length
+                      ? `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`
+                      : 'We service that area, but there are no available appointments right now. Please call back soon.';
+                    ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
+                  } else if (callState.machine && callState.issue) {
+                    ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. Do you want to get something scheduled?', last: true }));
+                    callState.askedForSchedule = true;
+                  } else if (callState.machine) {
+                    ws.send(JSON.stringify({ type: 'text', token: `Yeah, we do service that area. What's going on with your ${callState.machine.toLowerCase()}?`, last: true }));
+                  } else {
+                    ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. What kind of equipment do you need help with?', last: true }));
                   }
-                  ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that ZIP code area. Goodbye.", last: true }));
-                  callState.callEnded = true;
-                  setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
                   break;
                 }
-                ws.send(JSON.stringify({ type: 'text', token: 'What is your five digit ZIP code?', last: true }));
+                ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that ZIP code area. Goodbye.", last: true }));
+                callState.callEnded = true;
+                setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
                 break;
               }
               ws.send(JSON.stringify({ type: 'text', token: 'What is your five digit ZIP code?', last: true }));
@@ -3452,7 +3451,6 @@ wss.on('connection', (ws, req) => {
             } else if (dec === 'no') {
               callState.awaitingZipConfirmation = false;
               callState.zip = '';
-              callState.city = '';
               reply = 'Okay. What is your five digit ZIP code?';
             } else {
               reply = `I heard zip code ${callState.zip}. Is that correct?`;
