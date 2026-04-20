@@ -3138,8 +3138,38 @@ app.post('/voicemail', wrapRoute((req, res) => {
 }));
 
 // ===== JOBS PAGE =====
-app.get('/jobs', (req, res) => {
+app.get('/jobs', async (req, res) => {
   const jobs = loadJobs();
+
+  // Enrich appointment jobs with distance info
+  const enrichedJobs = await Promise.all(jobs.map(async (job) => {
+    if (job.requestType === 'Appointment Request' && job.zip) {
+      const miles = await getDistanceFromHomeMiles(job.zip);
+      const isFar = miles > 10;
+      return { ...job, miles: Math.round(miles * 10) / 10, isFar };
+    }
+    return { ...job, miles: null, isFar: null };
+  }));
+
+  // Build route stop numbers per service date
+  // Group by serviceDate, sort by window (morning first) then distance
+  const byDate = {};
+  enrichedJobs.forEach(job => {
+    if (job.requestType === 'Appointment Request' && job.serviceDate) {
+      if (!byDate[job.serviceDate]) byDate[job.serviceDate] = [];
+      byDate[job.serviceDate].push(job);
+    }
+  });
+
+  const stopNumbers = {};
+  Object.entries(byDate).forEach(([date, dateJobs]) => {
+    const morningWindow = routingConfig.fridaySaturdayMorningWindow;
+    const morning = dateJobs.filter(j => j.serviceWindow === morningWindow).sort((a, b) => (a.miles || 0) - (b.miles || 0));
+    const other = dateJobs.filter(j => j.serviceWindow !== morningWindow).sort((a, b) => (a.miles || 0) - (b.miles || 0));
+    [...morning, ...other].forEach((job, i) => {
+      stopNumbers[job.id] = i + 1;
+    });
+  });
 
   let html = `
 <!DOCTYPE html>
@@ -3156,29 +3186,20 @@ app.get('/jobs', (req, res) => {
       background: #ffffff;
       color: #111111;
     }
-    h1 {
-      margin-bottom: 8px;
-    }
-    .refresh-note {
-      color: #666666;
-      font-size: 14px;
-      margin-bottom: 16px;
-    }
+    h1 { margin-bottom: 8px; }
+    .refresh-note { color: #666666; font-size: 14px; margin-bottom: 16px; }
     .job {
       border: 1px solid #cccccc;
       border-radius: 8px;
       padding: 12px;
       margin-bottom: 12px;
     }
-    .job strong {
-      font-size: 18px;
-    }
-    .line {
-      margin-top: 4px;
-    }
-    a {
-      color: #0b57d0;
-    }
+    .job strong { font-size: 18px; }
+    .line { margin-top: 4px; }
+    .stop { font-size: 13px; font-weight: bold; color: #ffffff; background: #1a73e8; border-radius: 4px; padding: 2px 8px; display: inline-block; margin-bottom: 6px; }
+    .near { color: #1e7e34; font-weight: bold; }
+    .far { color: #c0392b; font-weight: bold; }
+    a { color: #0b57d0; }
   </style>
 </head>
 <body>
@@ -3186,22 +3207,29 @@ app.get('/jobs', (req, res) => {
   <div class="refresh-note">Auto-refreshing every 10 seconds</div>
 `;
 
-  if (jobs.length === 0) {
+  if (enrichedJobs.length === 0) {
     html += '<p>No jobs yet</p>';
     html += '</body></html>';
     res.send(html);
     return;
   }
 
-  jobs.forEach((job) => {
+  enrichedJobs.forEach((job) => {
+    const stop = stopNumbers[job.id];
+    const milesLabel = job.miles !== null ? `${job.miles} mi from home` : '';
+    const nearFarLabel = job.isFar !== null
+      ? (job.isFar ? `<span class="far">FAR</span>` : `<span class="near">NEAR</span>`)
+      : '';
+
     html += `
   <div class="job">
+    ${stop ? `<div class="stop">Stop ${stop}</div>` : ''}
     <strong>${job.time || ''}</strong>
     <div class="line">Type: ${job.requestType || ''}</div>
     <div class="line">Name: ${job.name || ''}</div>
     <div class="line">Machine: ${job.machine || ''}</div>
     <div class="line">Problem: ${job.problem || ''}</div>
-    ${job.zip ? `<div class="line">ZIP: ${job.zip}</div>` : ''}
+    ${job.zip ? `<div class="line">ZIP: ${job.zip}${milesLabel ? ` &nbsp;·&nbsp; ${milesLabel}` : ''}${nearFarLabel ? ` &nbsp;·&nbsp; ${nearFarLabel}` : ''}</div>` : ''}
     ${job.phone ? `<div class="line">Phone: ${job.phone}</div>` : ''}
     ${job.address ? `<div class="line">Address: ${job.address}</div>` : ''}
     ${job.email ? `<div class="line">Email: ${job.email}</div>` : ''}
