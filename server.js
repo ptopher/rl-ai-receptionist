@@ -1668,6 +1668,7 @@ function buildVoiceTwiml(req) {
       url="${xmlEscape(wsUrl)}"
       welcomeGreeting="${xmlEscape(config.welcomeGreeting)}"
       interruptible="false"
+      speechTimeout="3"
     />
   </Connect>
 </Response>
@@ -3314,7 +3315,7 @@ wss.on('connection', (ws, req) => {
     offeredSlots: [], selectedSlot: null, selectedDay: null, dayConfirmed: false,
     timeWindow: '', serviceDate: '', callerName: '', phone: null,
     phoneConfirmed: false, address: null, addressConfirmed: false,
-    email: null, emailConfirmed: false, booked: false,
+    email: null, emailConfirmed: false, awaitingEmail: false, booked: false,
     askedLastStarted: false, lastStartedAnswer: '', issueNeedsLastStarted: false,
     issueNeedsTuneUpClarification: false, gaveTuneUpClarification: false,
     pendingIssue: null, pendingIssueNeedsLastStarted: false,
@@ -3848,7 +3849,17 @@ wss.on('connection', (ws, req) => {
           }
 
           // --- Email ---
-          if (callState.addressConfirmed && !callState.email) {
+          if (callState.addressConfirmed && !callState.email && !callState.awaitingEmail) {
+            callState.awaitingEmail = true;
+            ws.send(JSON.stringify({
+              type: 'text',
+              token: 'What email address would you like us to use? We will send your appointment confirmation there.',
+              last: true
+            }));
+            break;
+          }
+
+          if (callState.awaitingEmail && !callState.email) {
             const email = await extractEmailViaGPT(userText, callState.callerName);
             if (!email) {
               ws.send(JSON.stringify({
@@ -3859,6 +3870,7 @@ wss.on('connection', (ws, req) => {
               break;
             }
             callState.email = email;
+            callState.awaitingEmail = false;
             ws.send(JSON.stringify({
               type: 'text',
               token: `I heard ${formatEmailForSpeech(callState.email)}. Is that correct?`,
@@ -3917,6 +3929,7 @@ wss.on('connection', (ws, req) => {
               setTimeout(() => { try { ws.close(); } catch (e) {} }, 25000);
             } else if (dec === 'no') {
               callState.email = null;
+              callState.awaitingEmail = true;
               ws.send(JSON.stringify({
                 type: 'text',
                 token: 'Okay. Please say the email address again.',
