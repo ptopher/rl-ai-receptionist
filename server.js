@@ -1786,7 +1786,6 @@ function buildVoiceTwiml(req) {
       url="${xmlEscape(wsUrl)}"
       welcomeGreeting="${xmlEscape(config.welcomeGreeting)}"
       interruptible="false"
-      speechTimeout="3"
     />
   </Connect>
 </Response>
