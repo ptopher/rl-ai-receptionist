@@ -51,124 +51,6 @@ async function getAIResponse(userInput) {
   return aiText || 'Okay, tell me a little more about that.';
 }
 
-function safeParseJsonObject(text) {
-  const raw = String(text || '').trim();
-  if (!raw) return null;
-
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    try {
-      return JSON.parse(match[0]);
-    } catch (innerError) {
-      return null;
-    }
-  }
-}
-
-function normalizeAiMachineLabel(value) {
-  const raw = String(value || '').trim().toLowerCase();
-  if (!raw) return '';
-
-  const directMatch = detectMachine(raw);
-  if (directMatch) return directMatch;
-
-  if (raw.includes('riding')) return 'Riding mower';
-  if (raw.includes('lawn') || raw.includes('push')) return 'Lawnmower';
-  if (raw.includes('generator')) return 'Generator';
-  if (raw.includes('pressure')) return 'Pressure washer';
-  if (raw.includes('snow')) return 'Snowblower';
-
-  return '';
-}
-
-async function analyzeIntakeWithAI(userInput, callState) {
-  const promptState = {
-    machine: callState.machine || '',
-    issue: callState.issue || '',
-    askedForSchedule: !!callState.askedForSchedule,
-    inScheduling: !!callState.inScheduling,
-    zipConfirmed: !!callState.zipConfirmed,
-    selectedSlot: !!callState.selectedSlot,
-    callerName: !!callState.callerName,
-    phoneConfirmed: !!callState.phoneConfirmed,
-    addressConfirmed: !!callState.addressConfirmed,
-    emailConfirmed: !!callState.emailConfirmed,
-    awaitingZipConfirmation: !!callState.awaitingZipConfirmation,
-    askedLastStarted: !!callState.askedLastStarted,
-    issueNeedsLastStarted: !!callState.issueNeedsLastStarted
-  };
-
-  try {
-    const response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4.1-mini',
-        input: [
-          {
-            role: 'system',
-            content: `You extract structured phone-intake data for a small-engine repair receptionist. Reply with JSON only.
-
-Allowed machine values: Riding mower, Lawnmower, Generator, Pressure washer, Snowblower, or empty string.
-
-Return an object with exactly these keys:
-- machine: string
-- issue: string
-- wants_schedule: boolean
-- asks_service_area: boolean
-- is_no_start: boolean
-- mentions_tuneup_for_broken_machine: boolean
-- zip: string
-
-Rules:
-- Only fill machine if the caller clearly said it.
-- Only fill issue if the caller clearly described a symptom or problem.
-- wants_schedule should be true only if the caller is asking to book or schedule now.
-- asks_service_area should be true only if they are asking whether you service their area.
-- is_no_start should be true for not starting / won't start / no start.
-- mentions_tuneup_for_broken_machine should be true only when caller suggests a tune-up for a machine that also will not start or has another real fault.
-- zip must be a 5 digit string if clearly spoken, otherwise empty string.
-- Never invent fields that are not said.`
-          },
-          {
-            role: 'user',
-            content: JSON.stringify({ current_state: promptState, caller_utterance: userInput })
-          }
-        ]
-      })
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error('AI intake extraction error:', errorData?.error?.message || response.statusText);
-      return null;
-    }
-
-    const data = await response.json();
-    const parsed = safeParseJsonObject(parseGPTResponseText(data));
-    if (!parsed || typeof parsed !== 'object') return null;
-
-    return {
-      machine: normalizeAiMachineLabel(parsed.machine || ''),
-      issue: String(parsed.issue || '').trim(),
-      wantsSchedule: !!parsed.wants_schedule,
-      asksServiceArea: !!parsed.asks_service_area,
-      isNoStart: !!parsed.is_no_start,
-      mentionsTuneupForBrokenMachine: !!parsed.mentions_tuneup_for_broken_machine,
-      zip: /^\d{5}$/.test(String(parsed.zip || '').trim()) ? String(parsed.zip).trim() : ''
-    };
-  } catch (error) {
-    console.error('AI intake extraction failed:', error);
-    return null;
-  }
-}
-
 
 // ===== HOME / ROUTING SETTINGS =====
 const routingConfig = config.routingConfig;
@@ -1052,7 +934,7 @@ function buildAvailabilitySpeech(slots) {
     }
   }
 
-  return `${speechParts.join(' ')} What works best for you?`;
+  return `${speechParts.join(' ')} Which would you prefer?`;
 }
 
 function detectNaturalSlot(req, slots) {
@@ -3554,42 +3436,7 @@ wss.on('connection', (ws, req) => {
           if (callState.callEnded) {
             break;
           }
-
-          const aiIntake = (!callState.selectedSlot && !callState.callerName && !callState.phone && !callState.address && !callState.email)
-            ? await analyzeIntakeWithAI(userText, callState)
-            : null;
-
-          if (aiIntake) {
-            console.log('[AI INTAKE]', JSON.stringify(aiIntake));
-
-            if (!callState.machine && aiIntake.machine) {
-              callState.machine = aiIntake.machine;
-            }
-
-            if (!callState.issue && aiIntake.issue) {
-              callState.issue = aiIntake.issue;
-            }
-
-            if (!callState.zip && aiIntake.zip) {
-              callState.zip = aiIntake.zip;
-            }
-
-            if (aiIntake.isNoStart) {
-              callState.issueNeedsLastStarted = true;
-            }
-
-            if (aiIntake.mentionsTuneupForBrokenMachine) {
-              callState.issueNeedsTuneUpClarification = true;
-            }
-
-            if (aiIntake.wantsSchedule && callState.machine && callState.issue && !callState.askedForSchedule) {
-              callState.askedForSchedule = true;
-              callState.inScheduling = true;
-            }
-          }
-
           const isNoStartIssue =
-            (aiIntake && aiIntake.isNoStart) ||
             cleaned.includes('not starting') ||
             cleaned.includes('won t start') ||
             cleaned.includes('wont start') ||
