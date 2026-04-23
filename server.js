@@ -930,7 +930,7 @@ function buildAvailabilitySpeech(slots) {
     });
   }
 
-  return `${speechParts.join(' ')} Which would you prefer?`;
+  return `We currently service on Fridays and Saturdays only. ${speechParts.join(' ')} Which would you prefer?`;
 }
 
 function detectNaturalSlot(req, slots) {
@@ -3358,7 +3358,7 @@ wss.on('connection', (ws, req) => {
                   callState.serviceable = true;
                   callState.awaitingZipConfirmation = false;
                   if (callState.inScheduling) {
-                    const slots = await findAvailableSlots(callState.zip, 1, 7);
+                    const slots = await findAvailableSlots(callState.zip, 1, 1);
                     callState.offeredSlots = slots;
                     const avail = slots.length
                       ? `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`
@@ -3454,7 +3454,7 @@ wss.on('connection', (ws, req) => {
               callState.awaitingZipConfirmation = false;
               callState.zipConfirmed = true;
               if (callState.serviceable) {
-                const slots = await findAvailableSlots(callState.zip, 1, 7);
+                const slots = await findAvailableSlots(callState.zip, 1, 1);
                 callState.offeredSlots = slots;
                 reply = slots.length
                   ? `Great. ${buildAvailabilitySpeech(slots)}`
@@ -3465,7 +3465,7 @@ wss.on('connection', (ws, req) => {
                   reply = `Sorry, we do not service zip code ${callState.zip}. Please call back if you need anything else.`;
                 } else {
                   callState.serviceable = true;
-                  const slots = await findAvailableSlots(callState.zip, 1, 7);
+                  const slots = await findAvailableSlots(callState.zip, 1, 1);
                   callState.offeredSlots = slots;
                   reply = slots.length
                     ? `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`
@@ -3579,7 +3579,7 @@ wss.on('connection', (ws, req) => {
             callState.askedLastStarted = true;
             ws.send(JSON.stringify({
               type: 'text',
-              token: 'When was the last time it started?',
+              token: `Got it, ${callState.machine ? callState.machine.toLowerCase() + ' ' : ''}not starting. One quick question — when did it last run?`,
               last: true
             }));
             break;
@@ -3661,7 +3661,7 @@ wss.on('connection', (ws, req) => {
             if (yesWords.some(w => text.includes(w))) {
               callState.inScheduling = true;
               if (callState.zipConfirmed) {
-                const slots = await findAvailableSlots(callState.zip, 1, 7);
+                const slots = await findAvailableSlots(callState.zip, 1, 1);
                 callState.offeredSlots = slots;
                 reply = slots.length
                   ? buildAvailabilitySpeech(slots)
@@ -3701,7 +3701,7 @@ wss.on('connection', (ws, req) => {
 
           // --- Show availability after ZIP confirmed ---
           if (callState.zipConfirmed && callState.inScheduling && !callState.offeredSlots.length) {
-            const slots = await findAvailableSlots(callState.zip, 1, 7);
+            const slots = await findAvailableSlots(callState.zip, 1, 1);
             callState.offeredSlots = slots;
             if (!slots.length) {
               reply = 'Sorry, there are no available appointments right now. Please call back soon.';
@@ -3731,15 +3731,19 @@ wss.on('connection', (ws, req) => {
               cleaned.includes('other');
 
             if (!chosen && noneWork) {
-              // Load more slots further out
+              // Load the next single slot after the last one offered
               const lastSlot = callState.offeredSlots[callState.offeredSlots.length - 1];
               const lastDate = lastSlot ? lastSlot.serviceDate : null;
-              const moreSlots = lastDate
-                ? await findAvailableSlots(callState.zip, 8, 4)
-                : [];
+              let nextOffset = 8;
+              if (lastDate) {
+                const today = new Date();
+                const last = new Date(`${lastDate}T12:00:00`);
+                nextOffset = Math.ceil((last - today) / (1000 * 60 * 60 * 24)) + 1;
+              }
+              const moreSlots = await findAvailableSlots(callState.zip, nextOffset, 1);
               if (moreSlots.length) {
                 callState.offeredSlots = moreSlots;
-                reply = `No problem. Here are some other options. ${buildAvailabilitySpeech(moreSlots)}`;
+                reply = `No problem. The next available is ${buildAvailabilitySpeech(moreSlots)}`;
               } else {
                 reply = 'I do not have any other openings available right now. Please call back soon and we can check again.';
               }
@@ -3849,7 +3853,6 @@ wss.on('connection', (ws, req) => {
             const dec = detectYesNoText(userText);
             if (dec === 'yes') {
               callState.addressConfirmed = true;
-              callState.awaitingEmail = true;
               ws.send(JSON.stringify({
                 type: 'text',
                 token: 'What email address would you like us to use? We will send your appointment confirmation there.',
