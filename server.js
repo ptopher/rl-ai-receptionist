@@ -908,30 +908,26 @@ function buildAvailabilitySpeech(slots) {
 
   // FRIDAY
   if (friday.length) {
-    const date = formatDateShort(friday[0].serviceDate);
-    const hasMorning = friday.some(s => s.serviceWindow === '10:00 to 12:00');
-    const hasAfternoon = friday.some(s => s.serviceWindow === '1:00 to 4:00');
-    if (hasMorning && hasAfternoon) {
-      speechParts.push(`Friday, ${date}, has morning from 10:00 to 12:00 and afternoon from 1:00 to 4:00.`);
-    } else if (hasMorning) {
-      speechParts.push(`Friday, ${date}, has morning from 10:00 to 12:00 available.`);
-    } else if (hasAfternoon) {
-      speechParts.push(`Friday, ${date}, has afternoon from 1:00 to 4:00 available.`);
-    }
+    friday.forEach(s => {
+      const date = formatDateShort(s.serviceDate);
+      if (s.serviceWindow === '10:00 to 12:00') {
+        speechParts.push(`Friday, ${date}, morning from 10:00 to noon.`);
+      } else if (s.serviceWindow === '1:00 to 4:00') {
+        speechParts.push(`Friday, ${date}, afternoon from 1:00 to 4:00.`);
+      }
+    });
   }
 
   // SATURDAY
   if (saturday.length) {
-    const date = formatDateShort(saturday[0].serviceDate);
-    const hasMorning = saturday.some(s => s.serviceWindow === '10:00 to 12:00');
-    const hasAfternoon = saturday.some(s => s.serviceWindow === '1:00 to 4:00');
-    if (hasMorning && hasAfternoon) {
-      speechParts.push(`Saturday, ${date}, has morning from 10:00 to 12:00 and afternoon from 1:00 to 4:00.`);
-    } else if (hasMorning) {
-      speechParts.push(`Saturday, ${date}, has morning from 10:00 to 12:00 available.`);
-    } else if (hasAfternoon) {
-      speechParts.push(`Saturday, ${date}, has afternoon from 1:00 to 4:00 available.`);
-    }
+    saturday.forEach(s => {
+      const date = formatDateShort(s.serviceDate);
+      if (s.serviceWindow === '10:00 to 12:00') {
+        speechParts.push(`Saturday, ${date}, morning from 10:00 to noon.`);
+      } else if (s.serviceWindow === '1:00 to 4:00') {
+        speechParts.push(`Saturday, ${date}, afternoon from 1:00 to 4:00.`);
+      }
+    });
   }
 
   return `${speechParts.join(' ')} Which would you prefer?`;
@@ -3723,10 +3719,38 @@ wss.on('connection', (ws, req) => {
             const chosen = detectNaturalSlot(tempReq, callState.offeredSlots);
             console.log('[SLOT CHOSEN]', chosen ? `${chosen.serviceDay} ${chosen.serviceDate} ${chosen.serviceWindow}` : 'null');
 
+            // Check if caller is saying none of the options work
+            const noneWork =
+              cleaned.includes('none') ||
+              cleaned.includes('neither') ||
+              cleaned.includes('not available') ||
+              cleaned.includes('don t work') ||
+              cleaned.includes('dont work') ||
+              cleaned.includes('something else') ||
+              cleaned.includes('different') ||
+              cleaned.includes('other');
+
+            if (!chosen && noneWork) {
+              // Load more slots further out
+              const lastSlot = callState.offeredSlots[callState.offeredSlots.length - 1];
+              const lastDate = lastSlot ? lastSlot.serviceDate : null;
+              const moreSlots = lastDate
+                ? await findAvailableSlots(callState.zip, 8, 4)
+                : [];
+              if (moreSlots.length) {
+                callState.offeredSlots = moreSlots;
+                reply = `No problem. Here are some other options. ${buildAvailabilitySpeech(moreSlots)}`;
+              } else {
+                reply = 'I do not have any other openings available right now. Please call back soon and we can check again.';
+              }
+              ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+              break;
+            }
+
             if (!chosen) {
               ws.send(JSON.stringify({
                 type: 'text',
-                token: 'Please say the day, the date, or Friday or Saturday morning or afternoon.',
+                token: 'Which option would you like? You can say the day and date, or morning or afternoon.',
                 last: true
               }));
               break;
@@ -3859,11 +3883,13 @@ wss.on('connection', (ws, req) => {
           }
 
           if (callState.awaitingEmail && !callState.email) {
+            // Send acknowledgment immediately so Twilio doesn't cut the caller off during GPT call
+            ws.send(JSON.stringify({ type: 'text', token: 'Got it.', last: false }));
             const email = await extractEmailViaGPT(userText, callState.callerName);
             if (!email) {
               ws.send(JSON.stringify({
                 type: 'text',
-                token: 'I did not get the email address clearly. Please say it again.',
+                token: 'I did not get the email address clearly. Please say it again slowly.',
                 last: true
               }));
               break;
@@ -3872,7 +3898,7 @@ wss.on('connection', (ws, req) => {
             callState.awaitingEmail = false;
             ws.send(JSON.stringify({
               type: 'text',
-              token: `I heard ${formatEmailForSpeech(callState.email)}. Is that correct?`,
+              token: `I have ${formatEmailForSpeech(callState.email)}. Is that correct?`,
               last: true
             }));
             callState.emailConfirmed = false;
