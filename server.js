@@ -3849,6 +3849,7 @@ wss.on('connection', (ws, req) => {
             const dec = detectYesNoText(userText);
             if (dec === 'yes') {
               callState.addressConfirmed = true;
+              callState.awaitingEmail = true;
               ws.send(JSON.stringify({
                 type: 'text',
                 token: 'What email address would you like us to use? We will send your appointment confirmation there.',
