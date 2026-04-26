@@ -19,36 +19,62 @@ function parseGPTResponseText(data) {
   return (data.output && data.output[0] && data.output[0].content && data.output[0].content[0] && data.output[0].content[0].text) || data.output_text || '';
 }
 
-async function getAIResponse(userInput) {
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: 'gpt-4.1-mini',
-      input: [
-        {
-          role: 'system',
-          content: SYSTEM_PROMPT
-        },
-        {
-          role: 'user',
-          content: userInput
-        }
-      ]
-    })
-  });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.error?.message || 'OpenAI request failed');
+function buildStateContext(callState) {
+  const lines = [];
+  lines.push(`Machine: ${callState.machine || 'not yet known'}`);
+  lines.push(`Issue: ${callState.issue || 'not yet known'}`);
+  lines.push(`ZIP: ${callState.zipConfirmed ? callState.zip + ' (confirmed)' : callState.zip ? callState.zip + ' (unconfirmed)' : 'not yet known'}`);
+  lines.push(`Serviceable area: ${callState.serviceable ? 'yes' : 'not confirmed'}`);
+  lines.push(`Scheduling: ${callState.inScheduling ? 'yes' : 'not started'}`);
+  if (callState.selectedSlot) {
+    lines.push(`Appointment slot: ${callState.selectedSlot.readableDate} ${callState.selectedSlot.serviceWindow}`);
   }
+  lines.push(`Caller name: ${callState.callerName || 'not yet collected'}`);
+  lines.push(`Phone: ${callState.phone ? 'collected' : 'not yet collected'}`);
+  lines.push(`Address: ${callState.address ? 'collected' : 'not yet collected'}`);
+  lines.push(`Email: ${callState.email ? 'collected' : 'not yet collected'}`);
+  return lines.join('\n');
+}
 
-  const aiText = parseGPTResponseText(data);
-  return aiText || 'Okay, tell me a little more about that.';
+async function getEmmaReply(callState, callerSaid, instruction, fallback) {
+  const stateContext = buildStateContext(callState);
+  const systemContent = `${SYSTEM_PROMPT}
+
+CURRENT CALL STATE:
+${stateContext}
+
+INSTRUCTION: ${instruction}
+
+RULES:
+- One sentence only. Natural, conversational, not robotic.
+- Do not ask for information already collected (see call state above).
+- Do not mention brand, model, or pricing unless the caller asked.
+- Never say "I understand" or "I see" or "Certainly" — just respond naturally.
+- This is a phone call — keep it brief and clear.`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4.1-mini',
+        input: [
+          { role: 'system', content: systemContent },
+          { role: 'user', content: callerSaid || '' }
+        ]
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error?.message || 'OpenAI error');
+    const text = parseGPTResponseText(data).trim();
+    return text || fallback;
+  } catch (err) {
+    console.error('getEmmaReply error:', err);
+    return fallback;
+  }
 }
 
 
@@ -3305,9 +3331,9 @@ function detectYesNoText(text) {
 wss.on('connection', (ws, req) => {
   console.log('ConversationRelay connected');
   const callState = {
-    machine: '', issue: '', zip: '', city: '', awaitingZipConfirmation: false,
+    machine: '', issue: '', zip: '', awaitingZipConfirmation: false,
     zipConfirmed: false, serviceable: false, askedForSchedule: false, inScheduling: false,
-    offeredSlots: [], selectedSlot: null, selectedDay: null, dayConfirmed: false,
+    offeredSlots: [], selectedSlot: null,
     timeWindow: '', serviceDate: '', callerName: '', phone: null,
     phoneConfirmed: false, address: null, addressConfirmed: false,
     email: null, emailConfirmed: false, awaitingEmail: false, booked: false,
@@ -3316,6 +3342,20 @@ wss.on('connection', (ws, req) => {
     pendingIssue: null, pendingIssueNeedsLastStarted: false,
     callEnded: false
   };
+
+  // Helper: send filler immediately, then send AI reply
+  async function emmaReply(callerSaid, instruction, fallback) {
+    ws.send(JSON.stringify({ type: 'text', token: 'Got it.', last: false }));
+    const reply = await getEmmaReply(callState, callerSaid, instruction, fallback);
+    ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+  }
+
+  // Helper: send AI reply with a custom filler
+  async function emmaReplyWithFiller(filler, callerSaid, instruction, fallback) {
+    ws.send(JSON.stringify({ type: 'text', token: filler, last: false }));
+    const reply = await getEmmaReply(callState, callerSaid, instruction, fallback);
+    ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+  }
 
   ws.on('message', async (message) => {
     try {
@@ -3329,121 +3369,137 @@ wss.on('connection', (ws, req) => {
           const cleaned = cleanText(userText);
           const text = userText.toLowerCase();
 
-          // ===== EARLY ZIP QUESTION DETECTION =====
-          // Only runs for actual service-area questions before scheduling starts.
-          if (!callState.zipConfirmed && !callState.callerName && !callState.phone && !callState.inScheduling) {
-            const possibleZip = normalizeSpokenDigits(text).slice(0, 5);
-            const hasZip = possibleZip.length === 5;
-            const isAreaQuestion =
-              text.includes('service zip') ||
-              text.includes('cover zip') ||
-              text.includes('zip code') ||
-              text.includes('what area') ||
-              text.includes('service my area') ||
-              text.includes('service that area');
-            const hasMachineKeyword = config.machineTypes.some(m =>
-              m.keywords.some(kw => text.includes(kw))
-            );
-            const isServiceQuestion =
-              (text.includes('do you service') || text.includes('do you cover')) &&
-              !hasMachineKeyword;
+          console.log('Caller said:', userText);
 
-            if (isAreaQuestion || isServiceQuestion) {
-              if (hasZip) {
-                callState.zip = possibleZip;
-                const matchingCounties = getCountyForZip(callState.zip);
-                const recognizedZip = matchingCounties.length > 0;
-                if (recognizedZip) {
-                  callState.zipConfirmed = true;
-                  callState.serviceable = true;
-                  callState.awaitingZipConfirmation = false;
-                  if (callState.inScheduling) {
-                    const slots = await findAvailableSlots(callState.zip, 1, 1);
-                    callState.offeredSlots = slots;
-                    const avail = slots.length
-                      ? `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`
-                      : 'We service that area, but there are no available appointments right now. Please call back soon.';
-                    ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
-                  } else if (callState.machine && callState.issue) {
-                    ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. Do you want to get something scheduled?', last: true }));
-                    callState.askedForSchedule = true;
-                  } else if (callState.machine) {
-                    ws.send(JSON.stringify({ type: 'text', token: `Yeah, we do service that area. What's going on with your ${callState.machine.toLowerCase()}?`, last: true }));
-                  } else {
-                    ws.send(JSON.stringify({ type: 'text', token: 'Yeah, we do service that area. What kind of equipment do you need help with?', last: true }));
-                  }
-                  break;
-                }
-                ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that ZIP code area. Goodbye.", last: true }));
-                callState.callEnded = true;
-                setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
-                break;
-              }
-              ws.send(JSON.stringify({ type: 'text', token: 'What is your five digit ZIP code?', last: true }));
-              break;
-            }
-          }
+          if (callState.callEnded) break;
 
-          // ===== EARLY EQUIPMENT QUESTION DETECTION =====
-          // Only runs before machine is known and before booking is in progress
-          if (!callState.machine && !callState.callerName && !callState.phone) {
-            if (
-              text.includes('do you work on') ||
-              text.includes('do you fix') ||
-              text.includes('do you repair') ||
-              text.includes('do you service')
-            ) {
-              let detectedMachine = null;
-
-              for (const m of config.machineTypes) {
-                for (const keyword of m.keywords) {
-                  if (text.includes(keyword)) {
-                    detectedMachine = m.name;
-                    break;
-                  }
-                }
-                if (detectedMachine) break;
-              }
-
-              if (detectedMachine) {
-                callState.machine = detectedMachine;
-                ws.send(JSON.stringify({
-                  type: 'text',
-                  token: `Yeah, we do work on that. What's it doing or not doing?`,
-                  last: true
-                }));
-                break;
-              }
-
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: "Sorry, we don't work on that equipment.",
-                last: true
-              }));
+          // ===== COMMERCIAL EQUIPMENT FILTER =====
+          {
+            const commercialKeywords = config.commercialKeywords || [
+              'commercial', 'stand on', 'stand-on', 'standon', 'pro series',
+              'zero turn commercial', 'heavy duty', 'industrial', 'fleet'
+            ];
+            const isCommercial = commercialKeywords.some(kw => cleaned.includes(kw) || text.includes(kw));
+            if (isCommercial) {
+              ws.send(JSON.stringify({ type: 'text', token: 'Sorry, we only service residential equipment. Goodbye.', last: true }));
               callState.callEnded = true;
               setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
               break;
             }
           }
 
-          console.log('Caller said:', userText);
-          let reply = '';
+          // ===== SILENT STATE EXTRACTION =====
+          // Run fast extractors on every turn to silently fill in state.
 
-          if (callState.callEnded) {
-            break;
+          // Machine
+          if (!callState.machine) {
+            const m = detectMachine(userText);
+            if (m) {
+              callState.machine = m;
+              if (callState.pendingIssue && !callState.issue) {
+                callState.issue = callState.pendingIssue;
+                if (callState.pendingIssueNeedsLastStarted) callState.issueNeedsLastStarted = true;
+                callState.pendingIssue = null;
+                callState.pendingIssueNeedsLastStarted = false;
+              } else {
+                const mc = cleanText(m);
+                const stripped = cleaned.replace(mc, '').trim();
+                if (stripped.length > 0 && !callState.issue) {
+                  const hasSymptom = config.symptomKeywords.some(kw => stripped.includes(kw));
+                  const isNoStart = stripped.includes("won't start") || stripped.includes('wont start') ||
+                    stripped.includes('will not start') || stripped.includes('not starting') || stripped.includes('no start');
+                  if (hasSymptom || isNoStart) {
+                    callState.issue = userText.trim();
+                    if (isNoStart) callState.issueNeedsLastStarted = true;
+                  } else {
+                    callState.pendingIssue = userText.trim();
+                    callState.pendingIssueNeedsLastStarted = isNoStart;
+                  }
+                }
+              }
+              console.log('[CALLSTATE] machine:', callState.machine, '| issue:', callState.issue);
+            }
           }
-          const isNoStartIssue =
-            cleaned.includes('not starting') ||
-            cleaned.includes('won t start') ||
-            cleaned.includes('wont start') ||
-            cleaned.includes('won t crank') ||
-            cleaned.includes('wont crank') ||
-            cleaned.includes('no start') ||
-            cleaned.includes('doesn t start') ||
-            cleaned.includes('doesnt start');
 
-          // --- ZIP confirmation ---
-          // Clear awaitingZipConfirmation if ZIP is already confirmed — prevents it from intercepting later turns
+          // Issue
+          if (!callState.issue) {
+            const hasSymptomKeyword = config.symptomKeywords.some(kw => cleaned.includes(kw));
+            const hasVagueIssue = config.vagueIssuePhrases.some(p => cleaned.includes(p));
+            const machineOnly = (config.machineOnlyWords || []).some(w => cleaned === w || cleaned.replace(/\s+/g,' ').trim() === w);
+            const isNoStartIssue = cleaned.includes('not starting') || cleaned.includes('won t start') ||
+              cleaned.includes('wont start') || cleaned.includes('no start') || cleaned.includes('doesn t start');
+            const wantsTuneUpButBroken =
+              (cleaned.includes('tune up') || cleaned.includes('tuneup')) &&
+              (cleaned.includes("won't start") || cleaned.includes('wont start') || cleaned.includes('not starting') ||
+               cleaned.includes('no start') || cleaned.includes('shut off') || cleaned.includes('stall') || cleaned.includes('dies'));
+
+            if (wantsTuneUpButBroken) {
+              callState.issue = userText.trim();
+              callState.issueNeedsTuneUpClarification = true;
+              console.log('[CALLSTATE] tune-up + broken captured:', callState.issue);
+            } else if (!machineOnly && !hasVagueIssue && hasSymptomKeyword) {
+              callState.issue = userText.trim();
+              if (isNoStartIssue) callState.issueNeedsLastStarted = true;
+              console.log('[CALLSTATE] issue captured:', callState.issue);
+            }
+          }
+
+          // ZIP (silent extraction — only when we're in scheduling or they gave it proactively)
+          if (!callState.zipConfirmed) {
+            const possibleZip = normalizeSpokenDigits(text).slice(0, 5);
+            if (possibleZip.length === 5 && getCountyForZip(possibleZip).length > 0) {
+              if (!callState.zip || callState.zip !== possibleZip) {
+                callState.zip = possibleZip;
+                callState.awaitingZipConfirmation = true;
+                console.log('[CALLSTATE] zip captured silently:', callState.zip);
+              }
+            }
+          }
+
+          // ===== EARLY "DO YOU SERVICE" QUESTIONS =====
+          if (!callState.inScheduling && !callState.callerName) {
+            const isEquipmentQuestion =
+              text.includes('do you work on') || text.includes('do you fix') ||
+              text.includes('do you repair') || text.includes('do you service');
+            const isAreaQuestion =
+              text.includes('what area') || text.includes('service my area') ||
+              text.includes('service that area') || text.includes('cover zip') ||
+              text.includes('do you service zip') || text.includes('do you cover');
+
+            if (isEquipmentQuestion && !callState.machine) {
+              let detected = null;
+              for (const m of config.machineTypes) {
+                for (const kw of m.keywords) {
+                  if (text.includes(kw)) { detected = m.name; break; }
+                }
+                if (detected) break;
+              }
+              if (detected) {
+                callState.machine = detected;
+                await emmaReply(userText,
+                  `Tell the caller yes we work on ${detected}s and ask what it's doing or not doing.`,
+                  `Yeah, we work on those. What's it doing?`);
+              } else {
+                ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't work on that equipment. Goodbye.", last: true }));
+                callState.callEnded = true;
+                setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
+              }
+              break;
+            }
+
+            if (isAreaQuestion && callState.zipConfirmed) {
+              if (callState.serviceable) {
+                await emmaReply(userText, 'Tell the caller yes we service their area and ask what equipment they need help with if not known, or ask if they want to schedule if machine and issue are known.', 'Yeah, we do service that area.');
+              } else {
+                ws.send(JSON.stringify({ type: 'text', token: "Sorry, we don't service that area. Goodbye.", last: true }));
+                callState.callEnded = true;
+                setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
+              }
+              break;
+            }
+          }
+
+          // ===== ZIP CONFIRMATION =====
           if (callState.awaitingZipConfirmation && callState.zipConfirmed) {
             callState.awaitingZipConfirmation = false;
           }
@@ -3453,353 +3509,199 @@ wss.on('connection', (ws, req) => {
             if (dec === 'yes') {
               callState.awaitingZipConfirmation = false;
               callState.zipConfirmed = true;
-              if (callState.serviceable) {
+              const counties = getCountyForZip(callState.zip);
+              if (!counties.length) {
+                ws.send(JSON.stringify({ type: 'text', token: `Sorry, we don't service zip code ${callState.zip}. Goodbye.`, last: true }));
+                callState.callEnded = true;
+                setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
+                break;
+              }
+              callState.serviceable = true;
+              if (callState.inScheduling) {
                 const slots = await findAvailableSlots(callState.zip, 1, 1);
                 callState.offeredSlots = slots;
-                reply = slots.length
-                  ? `Great. ${buildAvailabilitySpeech(slots)}`
-                  : 'We service that area, but there are no available appointments right now. Please call back soon.';
+                const avail = slots.length ? `Great. ${buildAvailabilitySpeech(slots)}` : 'We service that area but have no openings right now. Please call back soon.';
+                ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
               } else {
-                const counties = getCountyForZip(callState.zip);
-                if (!counties.length) {
-                  reply = `Sorry, we do not service zip code ${callState.zip}. Please call back if you need anything else.`;
-                } else {
-                  callState.serviceable = true;
-                  const slots = await findAvailableSlots(callState.zip, 1, 1);
-                  callState.offeredSlots = slots;
-                  reply = slots.length
-                    ? `Great, we do service that area. ${buildAvailabilitySpeech(slots)}`
-                    : 'We service that area, but there are no available appointments right now. Please call back soon.';
-                }
+                await emmaReply(userText,
+                  `Tell the caller we service their area and move the conversation forward. ${callState.machine && callState.issue ? 'Ask if they want to schedule.' : callState.machine ? 'Ask what the problem is.' : 'Ask what equipment they need help with.'}`,
+                  'Great, we do service that area.');
               }
             } else if (dec === 'no') {
               callState.awaitingZipConfirmation = false;
               callState.zip = '';
-              reply = 'Okay. What is your five digit ZIP code?';
+              ws.send(JSON.stringify({ type: 'text', token: 'Okay, what is your five digit ZIP code?', last: true }));
             } else {
-              reply = `I heard zip code ${callState.zip}. Is that correct?`;
+              ws.send(JSON.stringify({ type: 'text', token: `I heard ZIP code ${callState.zip}. Is that correct?`, last: true }));
             }
-            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
             break;
           }
 
-          // ===== COMMERCIAL EQUIPMENT FILTER =====
-          {
-            const commercialKeywords = config.commercialKeywords || [
-              'commercial', 'stand on', 'stand-on', 'standon', 'pro series',
-              'zero turn commercial', 'heavy duty', 'industrial', 'fleet'
-            ];
-            const isCommercial = commercialKeywords.some(kw => cleaned.includes(kw) || text.includes(kw));
-            console.log('[COMMERCIAL CHECK] cleaned:', cleaned, '| isCommercial:', isCommercial);
-            if (isCommercial) {
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: "Sorry, we only service residential equipment. Goodbye.",
-                last: true
-              }));
-              callState.callEnded = true;
-              setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
-              break;
-            }
-          }
-
-          // --- Machine ---
-          if (!callState.machine) {
-            const m = detectMachine(userText);
-            if (m) {
-              callState.machine = m;
-              // Apply any issue info captured before machine was known
-              if (callState.pendingIssue && !callState.issue) {
-                callState.issue = callState.pendingIssue;
-                if (callState.pendingIssueNeedsLastStarted) {
-                  callState.issueNeedsLastStarted = true;
-                }
-                callState.pendingIssue = null;
-                callState.pendingIssueNeedsLastStarted = false;
-              } else {
-                // Try to extract issue from current utterance alongside machine name
-                const mc = cleanText(m);
-                const stripped = cleaned.replace(mc, '').trim();
-                if (stripped.length > 0 && !callState.issue) {
-                  const hasSymptom = config.symptomKeywords.some(kw => stripped.includes(kw));
-                  const isNoStart =
-                    stripped.includes("won't start") || stripped.includes('wont start') ||
-                    stripped.includes('will not start') || stripped.includes('not starting') ||
-                    stripped.includes('no start');
-                  if (hasSymptom || isNoStart) {
-                    callState.issue = userText.trim();
-                    if (isNoStart) callState.issueNeedsLastStarted = true;
-                  } else {
-                    // Save as pending in case caller gave generic issue before machine name
-                    callState.pendingIssue = userText.trim();
-                    callState.pendingIssueNeedsLastStarted = isNoStart;
-                  }
-                }
-              }
-              console.log('[CALLSTATE] machine set to:', callState.machine, '| issue:', callState.issue, '| pendingIssue:', callState.pendingIssue, '| issueNeedsLastStarted:', callState.issueNeedsLastStarted);
-            }
-          }
-
-          // --- Issue ---
-          if (!callState.issue) {
-            const lowerUser = cleaned;
-
-            const hasSymptomKeyword = config.symptomKeywords.some(kw => lowerUser.includes(kw));
-            const hasVagueIssue = config.vagueIssuePhrases.some(p => lowerUser.includes(p));
-            const machineOnly = (config.machineOnlyWords || []).some(w => lowerUser === w || lowerUser.replace(/\s+/g,' ').trim() === w);
-
-            const wantsTuneUpButBroken =
-              (lowerUser.includes('tune up') || lowerUser.includes('tuneup')) &&
-              (lowerUser.includes("won't start") || lowerUser.includes('wont start') || lowerUser.includes('not starting') || lowerUser.includes('no start') || lowerUser.includes('shut off') || lowerUser.includes('stall') || lowerUser.includes('dies'));
-
-            if (wantsTuneUpButBroken) {
-              callState.issue = userText.trim();
-              callState.issueNeedsTuneUpClarification = true;
-              console.log('[CALLSTATE] tune-up misconception captured:', callState.issue);
-            } else if (!machineOnly && !hasVagueIssue && hasSymptomKeyword) {
-              callState.issue = userText.trim();
-              if (isNoStartIssue) callState.issueNeedsLastStarted = true;
-              console.log('[CALLSTATE] issue captured:', callState.issue, '| issueNeedsLastStarted:', callState.issueNeedsLastStarted);
-            }
-          }
-
-          // --- Tune-up misconception follow-up ---
+          // ===== TUNE-UP MISCONCEPTION =====
           if (callState.issueNeedsTuneUpClarification && !callState.gaveTuneUpClarification) {
             callState.gaveTuneUpClarification = true;
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: "If it won't start, it probably needs more than just a tune-up. When was the last time it ran?",
-              last: true
-            }));
+            await emmaReply(userText,
+              `The caller thinks a tune-up will fix their ${callState.machine || 'machine'} but it won't start. Gently correct them — if it won't start it likely needs more than a tune-up — and ask when it last ran.`,
+              `If it won't start, it probably needs more than a tune-up. When's the last time it ran?`);
             break;
           }
 
-          // --- Last-started follow-up for no-start issues ---
+          // ===== LAST STARTED FOLLOW-UP =====
           if (callState.issueNeedsLastStarted && !callState.askedLastStarted) {
             callState.askedLastStarted = true;
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: `Got it, ${callState.machine ? callState.machine.toLowerCase() + ' ' : ''}not starting. One quick question — when did it last run?`,
-              last: true
-            }));
+            await emmaReply(userText,
+              `Acknowledge the ${callState.machine || 'machine'} won't start and ask when it last ran. One sentence.`,
+              `Got it — when did it last run?`);
             break;
           }
 
-          // --- Capture answer to last-started ---
           if (callState.askedLastStarted && !callState.lastStartedAnswer) {
             callState.lastStartedAnswer = userText.trim();
             console.log('[CALLSTATE] lastStartedAnswer:', callState.lastStartedAnswer);
             if (!callState.askedForSchedule) {
               callState.askedForSchedule = true;
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'Would you like to schedule an appointment?',
-                last: true
-              }));
+              await emmaReply(userText,
+                `Acknowledge what they said about when it last ran, then ask if they want to schedule an appointment.`,
+                `Would you like to go ahead and schedule something?`);
             }
             break;
           }
 
-          // --- ZIP/service-area question mid-conversation ---
-          const isAskingServiceArea =
-            text.includes('do you service my area') ||
-            text.includes('do you service that area') ||
-            text.includes('do you cover my area') ||
-            text.includes('what area do you cover') ||
-            text.includes('what areas do you cover') ||
-            text.includes('do you service zip code') ||
-            text.includes('do you cover zip code') ||
-            text.includes('is that in your service area');
-
-          if (isAskingServiceArea && !callState.zipConfirmed) {
-            const possibleZip = normalizeSpokenDigits(userText).slice(0, 5);
-            if (possibleZip.length === 5) {
-              callState.zip = possibleZip;
-              callState.awaitingZipConfirmation = true;
-              ws.send(JSON.stringify({ type: 'text', token: `I heard zip code ${callState.zip}. Is that correct?`, last: true }));
-              break;
-            }
-            ws.send(JSON.stringify({ type: 'text', token: 'What ZIP code are you in?', last: true }));
-            break;
-          }
-
-          // --- Ask one useful follow-up instead of repeating machine/issue ---
-          if (callState.machine && !callState.issue) {
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: `Got it — ${callState.machine.toLowerCase()}. What's it doing or not doing?`,
-              last: true
-            }));
-            break;
-          }
-
+          // ===== NO MACHINE YET =====
           if (!callState.machine) {
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: 'What kind of equipment do you need help with?',
-              last: true
-            }));
+            await emmaReply(userText,
+              `The machine type is not yet known. Ask what type of equipment they need help with. One sentence.`,
+              `What kind of equipment do you need help with?`);
             break;
           }
 
-          // --- Ask to schedule after machine + issue are known ---
+          // ===== MACHINE KNOWN, NO ISSUE =====
+          if (callState.machine && !callState.issue) {
+            await emmaReply(userText,
+              `Machine is ${callState.machine}. Acknowledge it and ask what it's doing or not doing. One sentence.`,
+              `Got it — what's it doing or not doing?`);
+            break;
+          }
+
+          // ===== ASK TO SCHEDULE =====
           if (callState.machine && callState.issue && !callState.askedForSchedule && !callState.inScheduling) {
             callState.askedForSchedule = true;
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: 'Do you want to get something scheduled?',
-              last: true
-            }));
+            await emmaReply(userText,
+              `Machine is ${callState.machine}, issue is noted. Briefly acknowledge and ask if they want to schedule an appointment.`,
+              `Do you want to get something scheduled?`);
             break;
           }
 
-          // --- Customer wants scheduling ---
+          // ===== SCHEDULE DECISION =====
           if (callState.askedForSchedule && !callState.inScheduling) {
-            const yesWords = ['yes', 'yeah', 'yep', 'schedule', 'set it up', 'book it', 'book', 'let us schedule'];
-            const noWords = ['no', 'not right now', 'just calling', 'just checking', 'maybe later'];
-
+            const yesWords = ['yes', 'yeah', 'yep', 'schedule', 'set it up', 'book it', 'book', 'sure', 'please', 'okay', 'let s go'];
+            const noWords = ['no', 'not right now', 'just calling', 'just checking', 'maybe later', 'not yet'];
             if (yesWords.some(w => text.includes(w))) {
               callState.inScheduling = true;
               if (callState.zipConfirmed) {
                 const slots = await findAvailableSlots(callState.zip, 1, 1);
                 callState.offeredSlots = slots;
-                reply = slots.length
-                  ? buildAvailabilitySpeech(slots)
-                  : 'Sorry, there are no available appointments right now. Please call back soon.';
+                const avail = slots.length ? buildAvailabilitySpeech(slots) : 'Sorry, no openings right now. Please call back soon.';
+                ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
               } else {
-                reply = 'What is your five digit ZIP code?';
+                ws.send(JSON.stringify({ type: 'text', token: 'What is your five digit ZIP code?', last: true }));
               }
-              ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
-              break;
-            }
-
-            if (noWords.some(w => text.includes(w))) {
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'No problem. If you want, I can still take down your information and someone can follow up with you.',
-                last: true
-              }));
+            } else if (noWords.some(w => text.includes(w))) {
+              await emmaReply(userText,
+                `Caller doesn't want to schedule right now. Politely wrap up — let them know they can call back anytime.`,
+                `No problem — feel free to call back whenever you're ready. Have a good one.`);
               callState.callEnded = true;
-              setTimeout(() => { try { ws.close(); } catch (e) {} }, 4000);
-              break;
+              setTimeout(() => { try { ws.close(); } catch (e) {} }, 6000);
+            } else {
+              await emmaReply(userText,
+                `Not sure if caller wants to schedule. Ask again clearly — do they want to schedule an appointment?`,
+                `Did you want to go ahead and schedule something?`);
             }
+            break;
           }
 
-          // --- Collect ZIP once customer wants scheduling ---
+          // ===== COLLECT ZIP (scheduling in progress) =====
           if (callState.inScheduling && !callState.zipConfirmed) {
             const possibleZip = normalizeSpokenDigits(userText).slice(0, 5);
             if (possibleZip.length === 5) {
               callState.zip = possibleZip;
               callState.awaitingZipConfirmation = true;
-              reply = `I heard zip code ${callState.zip}. Is that correct?`;
+              ws.send(JSON.stringify({ type: 'text', token: `I got ZIP code ${callState.zip}. Is that right?`, last: true }));
             } else {
-              reply = 'What is your five digit ZIP code?';
+              ws.send(JSON.stringify({ type: 'text', token: 'What is your five digit ZIP code?', last: true }));
             }
-            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
             break;
           }
 
-          // --- Show availability after ZIP confirmed ---
+          // ===== SHOW AVAILABILITY =====
           if (callState.zipConfirmed && callState.inScheduling && !callState.offeredSlots.length) {
             const slots = await findAvailableSlots(callState.zip, 1, 1);
             callState.offeredSlots = slots;
-            if (!slots.length) {
-              reply = 'Sorry, there are no available appointments right now. Please call back soon.';
-            } else {
-              reply = buildAvailabilitySpeech(slots);
-            }
-            ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
+            const avail = slots.length ? buildAvailabilitySpeech(slots) : 'No openings right now. Please call back soon.';
+            ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
             break;
           }
 
-          // --- Slot selection (natural) ---
+          // ===== SLOT SELECTION =====
           if (callState.inScheduling && callState.offeredSlots.length && !callState.selectedSlot) {
             const tempReq = { body: { SpeechResult: userText, Digits: '' } };
-            console.log('[SLOTS OFFERED]', JSON.stringify(callState.offeredSlots.map(s => ({ day: s.serviceDay, date: s.serviceDate, window: s.serviceWindow }))));
             const chosen = detectNaturalSlot(tempReq, callState.offeredSlots);
-            console.log('[SLOT CHOSEN]', chosen ? `${chosen.serviceDay} ${chosen.serviceDate} ${chosen.serviceWindow}` : 'null');
-
-            // Check if caller is saying none of the options work
-            const noneWork =
-              cleaned.includes('none') ||
-              cleaned.includes('neither') ||
-              cleaned.includes('not available') ||
-              cleaned.includes('don t work') ||
-              cleaned.includes('dont work') ||
-              cleaned.includes('something else') ||
-              cleaned.includes('different') ||
-              cleaned.includes('other');
+            const noneWork = cleaned.includes('none') || cleaned.includes('neither') ||
+              cleaned.includes('not available') || cleaned.includes('don t work') ||
+              cleaned.includes('dont work') || cleaned.includes('something else') ||
+              cleaned.includes('different') || cleaned.includes('other');
 
             if (!chosen && noneWork) {
-              // Load the next single slot after the last one offered
               const lastSlot = callState.offeredSlots[callState.offeredSlots.length - 1];
-              const lastDate = lastSlot ? lastSlot.serviceDate : null;
               let nextOffset = 8;
-              if (lastDate) {
+              if (lastSlot) {
                 const today = new Date();
-                const last = new Date(`${lastDate}T12:00:00`);
+                const last = new Date(`${lastSlot.serviceDate}T12:00:00`);
                 nextOffset = Math.ceil((last - today) / (1000 * 60 * 60 * 24)) + 1;
               }
               const moreSlots = await findAvailableSlots(callState.zip, nextOffset, 1);
               if (moreSlots.length) {
                 callState.offeredSlots = moreSlots;
-                reply = `No problem. The next available is ${buildAvailabilitySpeech(moreSlots)}`;
+                ws.send(JSON.stringify({ type: 'text', token: `No problem. The next available is ${buildAvailabilitySpeech(moreSlots)}`, last: true }));
               } else {
-                reply = 'I do not have any other openings available right now. Please call back soon and we can check again.';
+                ws.send(JSON.stringify({ type: 'text', token: 'No other openings right now. Please call back soon.', last: true }));
               }
-              ws.send(JSON.stringify({ type: 'text', token: reply, last: true }));
               break;
             }
 
             if (!chosen) {
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'Which option would you like? You can say the day and date, or morning or afternoon.',
-                last: true
-              }));
+              ws.send(JSON.stringify({ type: 'text', token: 'Which option works for you? You can say the day, or morning or afternoon.', last: true }));
               break;
             }
 
             callState.selectedSlot = chosen;
             callState.timeWindow = chosen.serviceWindow;
             callState.serviceDate = chosen.serviceDate;
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: `Okay. I have ${chosen.readableDate} between ${chosen.serviceWindow}. What is your first and last name?`,
-              last: true
-            }));
+            await emmaReply(userText,
+              `Caller chose ${chosen.readableDate} ${chosen.serviceWindow}. Confirm it and ask for their first and last name.`,
+              `Perfect, I have you down for ${chosen.readableDate} between ${chosen.serviceWindow}. What's your first and last name?`);
             break;
           }
 
-          // --- Name ---
+          // ===== NAME =====
           if (callState.selectedSlot && !callState.callerName) {
             callState.callerName = normalizeNameText(userText);
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: `Thanks ${callState.callerName}. What is the best phone number to reach you?`,
-              last: true
-            }));
+            await emmaReply(userText,
+              `Caller's name is ${callState.callerName}. Acknowledge it and ask for the best phone number to reach them.`,
+              `Thanks ${callState.callerName}. What's the best number to reach you?`);
             break;
           }
 
-          // --- Phone ---
+          // ===== PHONE =====
           if (callState.callerName && !callState.phone) {
             const phone = normalizeTenDigitPhone(normalizeSpokenDigits(userText));
             if (!phone) {
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'I did not get the phone number. Please say it again.',
-                last: true
-              }));
+              ws.send(JSON.stringify({ type: 'text', token: "I didn't catch that — can you say the phone number again?", last: true }));
               break;
             }
             callState.phone = phone;
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: `I heard ${digitsToWords(phone)}. Is that correct?`,
-              last: true
-            }));
             callState.phoneConfirmed = false;
+            ws.send(JSON.stringify({ type: 'text', token: `I got ${digitsToWords(phone)}. Is that right?`, last: true }));
             break;
           }
 
@@ -3807,45 +3709,25 @@ wss.on('connection', (ws, req) => {
             const dec = detectYesNoText(userText);
             if (dec === 'yes') {
               callState.phoneConfirmed = true;
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'What is the service address?',
-                last: true
-              }));
+              ws.send(JSON.stringify({ type: 'text', token: 'What is the service address?', last: true }));
             } else if (dec === 'no') {
               callState.phone = null;
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'Okay. What is the best phone number to reach you?',
-                last: true
-              }));
+              ws.send(JSON.stringify({ type: 'text', token: 'Okay, what is the phone number?', last: true }));
             } else {
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: `I heard ${digitsToWords(callState.phone)}. Is that correct?`,
-                last: true
-              }));
+              ws.send(JSON.stringify({ type: 'text', token: `I heard ${digitsToWords(callState.phone)}. Is that right?`, last: true }));
             }
             break;
           }
 
-          // --- Address ---
+          // ===== ADDRESS =====
           if (callState.phoneConfirmed && !callState.address) {
             callState.address = await normalizeAddressForKnownZip(userText, callState.zip);
             if (!callState.address) {
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'I did not get the address. Please say the full street address again.',
-                last: true
-              }));
+              ws.send(JSON.stringify({ type: 'text', token: 'Could you say the full street address again?', last: true }));
               break;
             }
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: `I heard ${formatAddressForSpeech(callState.address)}. Is that correct?`,
-              last: true
-            }));
             callState.addressConfirmed = false;
+            ws.send(JSON.stringify({ type: 'text', token: `I have ${formatAddressForSpeech(callState.address)}. Is that right?`, last: true }));
             break;
           }
 
@@ -3853,59 +3735,34 @@ wss.on('connection', (ws, req) => {
             const dec = detectYesNoText(userText);
             if (dec === 'yes') {
               callState.addressConfirmed = true;
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'What email address would you like us to use? We will send your appointment confirmation there.',
-                last: true
-              }));
+              ws.send(JSON.stringify({ type: 'text', token: 'What email address should we send the confirmation to?', last: true }));
             } else if (dec === 'no') {
               callState.address = null;
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'Okay. What is the service address?',
-                last: true
-              }));
+              ws.send(JSON.stringify({ type: 'text', token: 'Okay, what is the service address?', last: true }));
             } else {
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: `I heard ${formatAddressForSpeech(callState.address)}. Is that correct?`,
-                last: true
-              }));
+              ws.send(JSON.stringify({ type: 'text', token: `I have ${formatAddressForSpeech(callState.address)}. Is that correct?`, last: true }));
             }
             break;
           }
 
-          // --- Email ---
+          // ===== EMAIL =====
           if (callState.addressConfirmed && !callState.email && !callState.awaitingEmail) {
             callState.awaitingEmail = true;
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: 'What email address would you like us to use? We will send your appointment confirmation there.',
-              last: true
-            }));
+            ws.send(JSON.stringify({ type: 'text', token: 'What email address should we send the confirmation to?', last: true }));
             break;
           }
 
           if (callState.awaitingEmail && !callState.email) {
-            // Send acknowledgment immediately so Twilio doesn't cut the caller off during GPT call
             ws.send(JSON.stringify({ type: 'text', token: 'Got it.', last: false }));
             const email = await extractEmailViaGPT(userText, callState.callerName);
             if (!email) {
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'I did not get the email address clearly. Please say it again slowly.',
-                last: true
-              }));
+              ws.send(JSON.stringify({ type: 'text', token: "I didn't get that clearly — can you say the email again slowly?", last: true }));
               break;
             }
             callState.email = email;
             callState.awaitingEmail = false;
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: `I have ${formatEmailForSpeech(callState.email)}. Is that correct?`,
-              last: true
-            }));
             callState.emailConfirmed = false;
+            ws.send(JSON.stringify({ type: 'text', token: `I have ${formatEmailForSpeech(callState.email)}. Is that correct?`, last: true }));
             break;
           }
 
@@ -3913,8 +3770,6 @@ wss.on('connection', (ws, req) => {
             const dec = detectYesNoText(userText);
             if (dec === 'yes') {
               callState.emailConfirmed = true;
-
-              // Save appointment immediately
               const job = {
                 id: generateJobId(),
                 requestType: 'Appointment Request',
@@ -3932,7 +3787,6 @@ wss.on('connection', (ws, req) => {
                 lastStarted: callState.lastStartedAnswer || '',
                 time: getEasternTimestamp()
               };
-
               saveJob(job);
               await rebalanceFridaySaturdayJobs(callState.serviceDate);
               try {
@@ -3948,10 +3802,9 @@ wss.on('connection', (ws, req) => {
               } catch (e) {
                 console.error('Email send failed:', e);
               }
-
               ws.send(JSON.stringify({
                 type: 'text',
-                token: `Great. You are all set for ${getReadableDate(callState.serviceDate)} between ${callState.timeWindow}. Your confirmation will be sent to that email. We look forward to helping with your ${callState.machine.toLowerCase()}. Goodbye.`,
+                token: `You're all set for ${getReadableDate(callState.serviceDate)} between ${callState.timeWindow}. Confirmation is on its way to that email. We look forward to helping with your ${callState.machine.toLowerCase()}. Goodbye.`,
                 last: true
               }));
               callState.callEnded = true;
@@ -3959,27 +3812,17 @@ wss.on('connection', (ws, req) => {
             } else if (dec === 'no') {
               callState.email = null;
               callState.awaitingEmail = true;
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: 'Okay. Please say the email address again.',
-                last: true
-              }));
+              ws.send(JSON.stringify({ type: 'text', token: 'Okay, go ahead and say the email address again.', last: true }));
             } else {
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: `I heard ${formatEmailForSpeech(callState.email)}. Is that correct?`,
-                last: true
-              }));
+              ws.send(JSON.stringify({ type: 'text', token: `I have ${formatEmailForSpeech(callState.email)}. Is that correct?`, last: true }));
             }
             break;
           }
 
-          // Fallback
-          ws.send(JSON.stringify({
-            type: 'text',
-            token: "I'm sorry, I didn't catch that. Could you say that again?",
-            last: true
-          }));
+          // ===== FALLBACK =====
+          await emmaReply(userText,
+            `Not sure what the caller needs. Acknowledge them and gently ask how you can help or move the conversation forward.`,
+            `Sorry, could you say that again?`);
           break;
         }
       }
