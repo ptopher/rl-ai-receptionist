@@ -1259,28 +1259,53 @@ async function getZipPlaceInfo(zip) {
   }
 }
 
-async function normalizeAddressForKnownZip(rawAddress, expectedZip) {
-  // Rejoin spaced-out digits (e.g. "2 0 7 7 2" → "20772") before normalizing
+// Local ZIP→city lookup — no external API call, no latency risk on live calls.
+const localZipCityMap = {
+  '20701': 'Annapolis Junction', '21029': 'Clarksville', '21044': 'Columbia',
+  '21045': 'Columbia', '21046': 'Columbia', '21075': 'Elkridge', '20759': 'Fulton',
+  '21076': 'Hanover', '20777': 'Highland', '20794': 'Jessup', '20723': 'Laurel',
+  '21042': 'Ellicott City', '21043': 'Ellicott City',
+  '21401': 'Annapolis', '21402': 'Annapolis', '21403': 'Annapolis',
+  '21012': 'Arnold', '21114': 'Crofton', '21032': 'Crownsville',
+  '21035': 'Davidsonville', '21037': 'Edgewater', '21054': 'Gambrills',
+  '21060': 'Glen Burnie', '21061': 'Glen Burnie', '21077': 'Harmans',
+  '20776': 'Harwood', '21090': 'Linthicum', '21108': 'Millersville',
+  '21113': 'Odenton', '21122': 'Pasadena', '21140': 'Riva',
+  '21144': 'Severn', '21146': 'Severna Park', '20724': 'Laurel',
+  '20707': 'Laurel', '20705': 'Beltsville', '20708': 'Laurel',
+  '20783': 'Hyattsville', '20742': 'College Park', '20771': 'Greenbelt',
+  '20769': 'Glenn Dale', '20706': 'Lanham', '20737': 'Riverdale',
+  '20782': 'Hyattsville', '20781': 'Bladensburg', '20784': 'Hyattsville',
+  '20720': 'Bowie', '20715': 'Bowie', '20721': 'Mitchellville',
+  '20716': 'Bowie', '20785': 'Hyattsville', '20743': 'Capitol Heights',
+  '20747': 'District Heights', '20746': 'Suitland', '20774': 'Upper Marlboro',
+  '20748': 'Temple Hills', '20745': 'Oxon Hill', '20735': 'Clinton',
+  '20772': 'Upper Marlboro', '20623': 'Brandywine', '20744': 'Fort Washington',
+  '20607': 'Accokeek', '20613': 'Brandywine',
+  '21228': 'Catonsville', '21227': 'Halethorpe', '21208': 'Pikesville',
+  '21133': 'Randallstown', '21136': 'Reisterstown', '21244': 'Windsor Mill',
+  '21163': 'Woodstock'
+};
+
+function normalizeAddressForKnownZip(rawAddress, expectedZip) {
   const rejoined = rejoinSpacedDigits(rawAddress || '');
-  const normalized = normalizeAddressText(rejoined);
+  let streetOnly = normalizeAddressText(rejoined);
 
-  if (!expectedZip) {
-    return normalized;
+  if (!expectedZip) return streetOnly;
+
+  // Strip trailing ZIP if caller included it
+  streetOnly = removeTrailingZipOnly(streetOnly, expectedZip);
+
+  const city = localZipCityMap[expectedZip] || '';
+
+  // Strip city if caller already said it (prevent double city)
+  if (city) {
+    const cityEscaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    streetOnly = streetOnly.replace(new RegExp(`\\s*\\b${cityEscaped}\\b\\s*`, 'gi'), ' ').replace(/\s+/g, ' ').trim();
   }
 
-  const place = await getZipPlaceInfo(expectedZip);
-  let streetOnly = removeKnownLocationSuffix(normalized, place, expectedZip) || removeTrailingZipOnly(normalized, expectedZip) || normalized;
-
-  if (!place || !place.city) {
-    return `${streetOnly} ${expectedZip}`.replace(/\s+/g, ' ').trim();
-  }
-
-  // Strip city name if it already appears in streetOnly (prevents double city)
-  const cityEscaped = place.city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  streetOnly = streetOnly.replace(new RegExp(`\\s*\\b${cityEscaped}\\b\\s*`, 'gi'), ' ').replace(/\s+/g, ' ').trim();
-
-  const fullState = place.state || 'Maryland';
-  return `${streetOnly} ${place.city} ${fullState} ${expectedZip}`.replace(/\s+/g, ' ').trim();
+  const cityPart = city ? ` ${city}` : '';
+  return `${streetOnly}${cityPart} Maryland ${expectedZip}`.replace(/\s+/g, ' ').trim();
 }
 
 function haversineMiles(lat1, lon1, lat2, lon2) {
@@ -2153,7 +2178,7 @@ app.post('/getAddressForAppointment', wrapRoute(async (req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
   const rawAddress = String(req.body.SpeechResult || '').trim();
-  const address = await normalizeAddressForKnownZip(rawAddress, zip);
+  const address = normalizeAddressForKnownZip(rawAddress, zip);
 
   const sameAddressUrl = absoluteUrl(
     req,
@@ -2367,7 +2392,7 @@ app.post('/correctAppointmentAddress', wrapRoute(async (req, res) => {
   const name = req.query.name || 'Unknown';
   const phone = req.query.phone || '';
   const rawAddress = String(req.body.SpeechResult || '').trim();
-  const address = await normalizeAddressForKnownZip(rawAddress, zip);
+  const address = normalizeAddressForKnownZip(rawAddress, zip);
 
   const sameUrl = absoluteUrl(
     req,
@@ -3707,7 +3732,7 @@ wss.on('connection', (ws, req) => {
 
           // ===== ADDRESS =====
           if (callState.phoneConfirmed && !callState.address) {
-            callState.address = await normalizeAddressForKnownZip(userText, callState.zip);
+            callState.address = normalizeAddressForKnownZip(userText, callState.zip);
             if (!callState.address) {
               ws.send(JSON.stringify({ type: 'text', token: 'Could you say the full street address again?', last: true }));
               break;
