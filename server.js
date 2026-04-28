@@ -708,13 +708,18 @@ async function extractEmailViaGPT(rawSpeechText, callerName) {
 
   console.log('Email GPT direct result:', gptDirect);
 
-  // Step 3: If both agree or only one produced a result, use what we have
+  // Step 3: Trust regex first — handles spelled-out emails better than GPT.
+  // GPT often mishears single letters (C→G, P→B, T→D) on phone audio.
+  // Only fall back to GPT when regex produces nothing.
   if (!gptDirect && !regexResult) return '';
-  if (!gptDirect) return regexResult;
-  if (!regexResult) return gptDirect;
-  if (gptDirect === regexResult) return gptDirect;
+  if (regexResult) {
+    console.log('Email: using regex result:', regexResult);
+    return regexResult;
+  }
+  console.log('Email: regex failed, using GPT result:', gptDirect);
+  return gptDirect;
 
-  // Step 4: They differ — ask GPT to pick the best one
+  // Step 4 (kept as safety, rarely reached now)
   console.log('Email candidates differ — regex:', regexResult, 'gpt:', gptDirect, '— running tiebreaker');
   try {
     const tbResponse = await fetch('https://api.openai.com/v1/responses', {
@@ -1293,15 +1298,19 @@ function normalizeAddressForKnownZip(rawAddress, expectedZip) {
 
   if (!expectedZip) return streetOnly;
 
-  // Strip trailing ZIP if caller included it
+  // Strip trailing ZIP
   streetOnly = removeTrailingZipOnly(streetOnly, expectedZip);
+
+  // Strip trailing "Maryland" or "MD" (with or without ZIP after it)
+  streetOnly = streetOnly.replace(/\s+Maryland\s*\d{0,5}\s*$/i, '').trim();
+  streetOnly = streetOnly.replace(/\s+MD\s*\d{0,5}\s*$/i, '').trim();
 
   const city = localZipCityMap[expectedZip] || '';
 
   // Strip city if caller already said it (prevent double city)
   if (city) {
     const cityEscaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    streetOnly = streetOnly.replace(new RegExp(`\\s*\\b${cityEscaped}\\b\\s*`, 'gi'), ' ').replace(/\s+/g, ' ').trim();
+    streetOnly = streetOnly.replace(new RegExp(`\\s*\\b${cityEscaped}\\b\\s*$`, 'gi'), '').replace(/\s+/g, ' ').trim();
   }
 
   const cityPart = city ? ` ${city}` : '';
