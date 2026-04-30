@@ -3333,6 +3333,25 @@ function detectYesNoText(text) {
   return '';
 }
 
+function getFirstName(fullName) {
+  const parts = String(fullName || '').trim().split(/s+/).filter(Boolean);
+  return parts[0] || String(fullName || '').trim();
+}
+
+function detectMachineFast(input) {
+  const cleaned = cleanText(applyLocalCorrections(input));
+
+  if (cleaned.includes('riding mower') || cleaned.includes('ride on mower') || cleaned.includes('rider mower')) {
+    return 'Riding mower';
+  }
+
+  if (cleaned.includes('lawn tractor') || cleaned.includes('tractor mower')) {
+    return 'Riding mower';
+  }
+
+  return detectMachine(input);
+}
+
 wss.on('connection', (ws, req) => {
   console.log('ConversationRelay connected');
   const callState = {
@@ -3395,7 +3414,7 @@ wss.on('connection', (ws, req) => {
 
           // Machine
           if (!callState.machine) {
-            const m = detectMachine(userText);
+            const m = detectMachineFast(userText);
             if (m) {
               callState.machine = m;
               if (!callState.machineSpoken) {
@@ -3707,16 +3726,17 @@ wss.on('connection', (ws, req) => {
             callState.serviceDate = chosen.serviceDate;
             await emmaReply(userText,
               `Caller chose ${chosen.readableDate} ${chosen.serviceWindow}. Confirm it and ask for their first and last name.`,
-              `Okay, ${chosen.readableDate} between ${chosen.serviceWindow}. Can I get your first and last name?`);
+              `Okay, ${chosen.readableDate}, from ${chosen.serviceWindow}. Can I get your first and last name?`);
             break;
           }
 
           // ===== NAME =====
           if (callState.selectedSlot && !callState.callerName) {
             callState.callerName = normalizeNameText(userText);
+            const spokenFirstName = getFirstName(callState.callerName);
             await emmaReply(userText,
-              `Caller's name is ${callState.callerName}. Acknowledge it and ask for the best phone number to reach them.`,
-              `Thanks, ${callState.callerName}. What is the best phone number to reach you?`);
+              `Caller's name is ${callState.callerName}. Acknowledge it using first name only and ask for the best phone number to reach them.`,
+              `Thanks, ${spokenFirstName}. What is the best phone number to reach you?`);
             break;
           }
 
@@ -3763,6 +3783,7 @@ wss.on('connection', (ws, req) => {
             const dec = detectYesNoText(userText);
             if (dec === 'yes') {
               callState.addressConfirmed = true;
+              callState.awaitingEmail = true;
               ws.send(JSON.stringify({ type: 'text', token: 'What email address should we send the confirmation to?', last: true }));
             } else if (dec === 'no') {
               callState.address = null;
@@ -3781,8 +3802,7 @@ wss.on('connection', (ws, req) => {
           }
 
           if (callState.awaitingEmail && !callState.email) {
-            ws.send(JSON.stringify({ type: 'text', token: 'Got it.', last: false }));
-            const email = await extractEmailViaGPT(userText, callState.callerName);
+            const email = fallbackExtractEmail(userText);
             if (!email) {
               ws.send(JSON.stringify({ type: 'text', token: "I didn't get that clearly — can you say the email again slowly?", last: true }));
               break;
@@ -3832,7 +3852,7 @@ wss.on('connection', (ws, req) => {
               }
               ws.send(JSON.stringify({
                 type: 'text',
-                token: `You're all set for ${getReadableDate(callState.serviceDate)} between ${callState.timeWindow}. Confirmation is on its way to that email. We look forward to helping with your ${callState.machineSpoken || callState.machine.toLowerCase()}. Goodbye.`,
+                token: `You're all set for ${getReadableDate(callState.serviceDate)}, from ${callState.timeWindow}. Confirmation is on its way to that email. We look forward to helping with your ${callState.machineSpoken || callState.machine.toLowerCase()}. Goodbye.`,
                 last: true
               }));
               callState.callEnded = true;
