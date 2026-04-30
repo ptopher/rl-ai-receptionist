@@ -911,29 +911,29 @@ function formatDateShort(serviceDate) {
   });
 }
 
+function formatSlotPhrase(slot) {
+  const date = formatDateShort(slot.serviceDate);
+  const day = slot.serviceDay;
+  if (slot.serviceWindow === '10:00 to 12:00') {
+    return `${day}, ${date}, morning from 10:00 to noon`;
+  }
+  if (slot.serviceWindow === '1:00 to 4:00') {
+    return `${day}, ${date}, afternoon from 1:00 to 4:00`;
+  }
+  return `${day}, ${date}, ${slot.serviceWindow}`;
+}
+
 function buildAvailabilitySpeech(slots) {
   if (!slots || !slots.length) {
     return 'There are no available appointments right now.';
   }
 
-  function slotPhrase(slot) {
-    const date = formatDateShort(slot.serviceDate);
-    const day = slot.serviceDay;
-    if (slot.serviceWindow === '10:00 to 12:00') {
-      return `${day}, ${date}, morning from 10:00 to noon`;
-    }
-    if (slot.serviceWindow === '1:00 to 4:00') {
-      return `${day}, ${date}, afternoon from 1:00 to 4:00`;
-    }
-    return `${day}, ${date}, ${slot.serviceWindow}`;
-  }
-
   if (slots.length === 1) {
-    return `We currently service on Fridays and Saturdays only. The earliest I have is ${slotPhrase(slots[0])}. Does that work for you?`;
+    return `The earliest I have for your ZIP code is ${formatSlotPhrase(slots[0])}. Does that work for you?`;
   }
 
-  const options = slots.map(slotPhrase);
-  return `We currently service on Fridays and Saturdays only. I have ${options.join(', ')}. Which would you prefer?`;
+  const options = slots.map(formatSlotPhrase);
+  return `For your ZIP code, I have ${options.join(', ')}. Which would you prefer?`;
 }
 function detectNaturalSlot(req, slots) {
   const speech = (req.body.SpeechResult || '').toLowerCase();
@@ -3666,7 +3666,8 @@ wss.on('connection', (ws, req) => {
             if (!chosen && yesToOnlyOption) {
               chosen = callState.offeredSlots[0];
             }
-            const noneWork = cleaned.includes('none') || cleaned.includes('neither') ||
+            const noToOfferedAppointment = detectYesNoText(userText) === 'no';
+            const noneWork = noToOfferedAppointment || cleaned.includes('none') || cleaned.includes('neither') ||
               cleaned.includes('not available') || cleaned.includes('don t work') ||
               cleaned.includes('dont work') || cleaned.includes('something else') ||
               cleaned.includes('different') || cleaned.includes('other');
@@ -3675,22 +3676,29 @@ wss.on('connection', (ws, req) => {
               const lastSlot = callState.offeredSlots[callState.offeredSlots.length - 1];
               let nextOffset = 8;
               if (lastSlot) {
-                const today = new Date();
+                const todayKey = formatEasternDateKey(getEasternNow());
+                const today = new Date(`${todayKey}T12:00:00`);
                 const last = new Date(`${lastSlot.serviceDate}T12:00:00`);
-                nextOffset = Math.ceil((last - today) / (1000 * 60 * 60 * 24)) + 1;
+                nextOffset = Math.max(1, Math.ceil((last - today) / (1000 * 60 * 60 * 24)) + 1);
               }
+
               const moreSlots = await findAvailableSlots(callState.zip, nextOffset, 1);
               if (moreSlots.length) {
                 callState.offeredSlots = moreSlots;
-                ws.send(JSON.stringify({ type: 'text', token: `No problem. The next available is ${buildAvailabilitySpeech(moreSlots)}`, last: true }));
+                const nextPhrase = formatSlotPhrase(moreSlots[0]);
+                ws.send(JSON.stringify({
+                  type: 'text',
+                  token: `No problem. The next available for your ZIP code is ${nextPhrase}. Does that work for you?`,
+                  last: true
+                }));
               } else {
-                ws.send(JSON.stringify({ type: 'text', token: 'No other openings right now. Please call back soon.', last: true }));
+                ws.send(JSON.stringify({ type: 'text', token: 'I do not see another opening for that ZIP code right now. Please call back soon.', last: true }));
               }
               break;
             }
 
             if (!chosen) {
-              ws.send(JSON.stringify({ type: 'text', token: callState.offeredSlots.length === 1 ? 'Does that appointment work for you? Please say yes or no.' : 'Which option works for you? You can say the day, or morning or afternoon.', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: callState.offeredSlots.length === 1 ? 'Please say yes if that appointment works, or no if you want the next available date for your ZIP code.' : 'Which option works for you? You can say the day, or morning or afternoon.', last: true }));
               break;
             }
 
