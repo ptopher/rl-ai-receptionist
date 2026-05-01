@@ -297,56 +297,6 @@ function normalizeAddressText(address) {
   return rebuilt.join(' ').replace(/\s{2,}/g, ' ').trim();
 }
 
-function normalizeAddressTextPreserveStreet(address) {
-  let corrected = String(address || '');
-
-  corrected = corrected
-    .replace(/[?!"""]/g, ' ')
-    .replace(/[;:]/g, ' ')
-    .replace(/\s*,\s*/g, ' ')
-    .replace(/\s*\.\s*/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  corrected = corrected
-    .replace(/\b7\s+Maryland\b/gi, 'Severn Maryland')
-    .replace(/\bStubborn\s+Maryland\b/gi, 'Severn Maryland')
-    .replace(/\bStubbern\s+Maryland\b/gi, 'Severn Maryland');
-
-  const tokens = corrected.split(/\s+/);
-  const rebuilt = [];
-
-  for (let i = 0; i < tokens.length; i += 1) {
-    const rawToken = tokens[i];
-    const token = rawToken.replace(/[,.]/g, '');
-
-    if (!token) continue;
-
-    if (/^\d[\d-]*$/.test(token)) {
-      rebuilt.push(token);
-      continue;
-    }
-
-    const suffix = normalizeStreetSuffixWord(token);
-    if (suffix) {
-      rebuilt.push(suffix);
-      continue;
-    }
-
-    const normalizedWord = token
-      .split('-')
-      .map((piece) => {
-        if (!piece) return piece;
-        return piece.charAt(0).toUpperCase() + piece.slice(1).toLowerCase();
-      })
-      .join('-');
-
-    rebuilt.push(normalizedWord);
-  }
-
-  return rebuilt.join(' ').replace(/\s{2,}/g, ' ').trim();
-}
-
 function removeTrailingZipOnly(text, zip) {
   if (!zip) return String(text || '').trim();
   const escapedZip = zip.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -665,7 +615,7 @@ function isAcceptableEmail(email) {
 }
 
 function sanitizeLooseEmail(email) {
-  return String(email || '')
+  let val = String(email || '')
     .toLowerCase()
     .replace(/[^a-z0-9@._+\-]/g, '')
     .replace(/\.{2,}/g, '.')
@@ -676,8 +626,18 @@ function sanitizeLooseEmail(email) {
     .replace(/^[._+\-]+/, '')
     .replace(/[._+\-]+$/, '')
     .trim();
+  // Strip transcription-artifact periods between letters and digits in local part
+  // e.g. 'ct.88891@gmail.com' -> 'ct88891@gmail.com'
+  if (val.includes('@')) {
+    const atIdx = val.indexOf('@');
+    let local = val.slice(0, atIdx);
+    const domain = val.slice(atIdx);
+    local = local.replace(/([a-z]+)\.([0-9])/g, '$1$2');
+    local = local.replace(/([0-9])\.([a-z])/g, '$1$2');
+    val = local + domain;
+  }
+  return val;
 }
-
 function extractEmailFromSpeech(req) {
   const raw = String(req.body.SpeechResult || '').trim();
   if (!raw) return '';
@@ -859,83 +819,6 @@ function formatEmailForSpeech(email) {
     .trim();
 
   return `${spellOut(local)}, at, ${domainSpoken}`;
-}
-
-function repairLiveEmail(email, rawText = '') {
-  let value = sanitizeLooseEmail(email);
-  if (!value || !value.includes('@')) return value;
-
-  const raw = String(rawText || '').toLowerCase();
-  const [localRaw, domainRaw] = value.split('@');
-  let local = localRaw || '';
-  const domain = domainRaw || '';
-
-  // Phone transcripts often add punctuation dots between spoken letters/numbers.
-  // Keep a dot only when the caller explicitly says the word "dot" or "period".
-  if (!/\b(dot|period)\b/.test(raw)) {
-    local = local.replace(/\./g, '');
-  }
-
-  return sanitizeLooseEmail(`${local}@${domain}`);
-}
-
-function extractLiveEmailFromSpeech(rawText) {
-  const email = fallbackExtractEmail(rawText);
-  return repairLiveEmail(email, rawText);
-}
-
-function getEmailDomain(email) {
-  const value = String(email || '').toLowerCase().trim();
-  const parts = value.split('@');
-  return parts.length === 2 && parts[1] ? parts[1] : '';
-}
-
-function normalizeSpelledEmailLocal(rawText) {
-  let raw = String(rawText || '').toLowerCase().trim();
-
-  // If caller says the full email anyway, keep only the local part before "at".
-  raw = raw
-    .replace(/@.*$/g, '')
-    .replace(/\bat\b.*$/g, '')
-    .replace(/\bat sign\b.*$/g, '')
-    .replace(/\bat the rate\b.*$/g, '')
-    .replace(/\b(my email is|email is|email address is|my email address is|it is|it's|its)\b/g, ' ');
-
-  raw = raw.replace(/[.,"']/g, ' ');
-
-  const digitMap = {
-    zero: '0', one: '1', two: '2', to: '2', too: '2', three: '3',
-    four: '4', for: '4', five: '5', six: '6', seven: '7', eight: '8',
-    ate: '8', nine: '9'
-  };
-
-  const letterMap = {
-    a: 'a', ay: 'a', b: 'b', bee: 'b', be: 'b', c: 'c', cee: 'c', see: 'c', sea: 'c',
-    d: 'd', dee: 'd', e: 'e', f: 'f', ef: 'f', g: 'g', gee: 'g', h: 'h', aitch: 'h',
-    i: 'i', j: 'j', jay: 'j', k: 'k', kay: 'k', l: 'l', el: 'l', m: 'm', em: 'm',
-    n: 'n', en: 'n', o: 'o', oh: 'o', p: 'p', pee: 'p', q: 'q', cue: 'q', queue: 'q',
-    r: 'r', ar: 'r', s: 's', ess: 's', t: 't', tee: 't', u: 'u', you: 'u', v: 'v', vee: 'v',
-    w: 'w', doubleyou: 'w', x: 'x', ex: 'x', y: 'y', why: 'y', z: 'z', zee: 'z', zed: 'z'
-  };
-
-  const tokens = raw.split(/\s+/).filter(Boolean);
-  let local = '';
-
-  for (const token of tokens) {
-    if (/^[a-z0-9]+$/.test(token) && token.length > 1) {
-      local += token;
-      continue;
-    }
-    if (digitMap[token]) {
-      local += digitMap[token];
-      continue;
-    }
-    if (letterMap[token]) {
-      local += letterMap[token];
-    }
-  }
-
-  return local.replace(/[^a-z0-9_+\-]/g, '');
 }
 
 function loadJobs() {
@@ -1421,29 +1304,23 @@ const localZipCityMap = {
 
 function normalizeAddressForKnownZip(rawAddress, expectedZip) {
   const rejoined = rejoinSpacedDigits(rawAddress || '');
-  let streetOnly = normalizeAddressTextPreserveStreet(rejoined);
+  let streetOnly = normalizeAddressText(rejoined);
 
   if (!expectedZip) return streetOnly;
 
-  // Strip trailing ZIP/state/city only. Never remove street words from the middle.
+  // Strip trailing ZIP
   streetOnly = removeTrailingZipOnly(streetOnly, expectedZip);
-  streetOnly = streetOnly.replace(/\s+Maryland\s*$/i, '').trim();
-  streetOnly = streetOnly.replace(/\s+MD\s*$/i, '').trim();
+
+  // Strip trailing "Maryland" or "MD" (with or without ZIP after it)
+  streetOnly = streetOnly.replace(/\s+Maryland\s*\d{0,5}\s*$/i, '').trim();
+  streetOnly = streetOnly.replace(/\s+MD\s*\d{0,5}\s*$/i, '').trim();
 
   const city = localZipCityMap[expectedZip] || '';
 
-  // Strip the known city only when it appears at the end of what the caller said.
+  // Strip city if caller already said it (prevent double city)
   if (city) {
     const cityEscaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    streetOnly = streetOnly
-      .replace(new RegExp(`\\s*\\b${cityEscaped}\\b\\s*$`, 'i'), '')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  // If the caller gave only a number, ask again instead of saving a bad address.
-  if (!/[A-Za-z]/.test(streetOnly) || /^\d+$/.test(streetOnly)) {
-    return '';
+    streetOnly = streetOnly.replace(new RegExp(`\\s*\\b${cityEscaped}\\b\\s*$`, 'gi'), '').replace(/\s+/g, ' ').trim();
   }
 
   const cityPart = city ? ` ${city}` : '';
@@ -3467,23 +3344,8 @@ function detectYesNoText(text) {
 }
 
 function getFirstName(fullName) {
-  const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean);
+  const parts = String(fullName || '').trim().split(/s+/).filter(Boolean);
   return parts[0] || String(fullName || '').trim();
-}
-
-function normalizeCallerNameForLiveCall(rawName) {
-  const value = String(rawName || '')
-    .replace(/[.,;:!?]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (!value) return '';
-
-  return value
-    .split(/\s+/)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(' ')
-    .trim();
 }
 
 function detectMachineFast(input) {
@@ -3508,7 +3370,7 @@ wss.on('connection', (ws, req) => {
     offeredSlots: [], selectedSlot: null,
     timeWindow: '', serviceDate: '', callerName: '', phone: null,
     phoneConfirmed: false, address: null, addressConfirmed: false,
-    email: null, emailConfirmed: false, awaitingEmail: false, emailCorrectionMode: false, emailCorrectionDomain: '', booked: false,
+    email: null, emailConfirmed: false, awaitingEmail: false, booked: false,
     askedLastStarted: false, lastStartedAnswer: '', issueNeedsLastStarted: false,
     issueNeedsTuneUpClarification: false, gaveTuneUpClarification: false,
     pendingIssue: null, pendingIssueNeedsLastStarted: false,
@@ -3880,7 +3742,7 @@ wss.on('connection', (ws, req) => {
 
           // ===== NAME =====
           if (callState.selectedSlot && !callState.callerName) {
-            callState.callerName = normalizeCallerNameForLiveCall(userText);
+            callState.callerName = normalizeNameText(userText);
             const spokenFirstName = getFirstName(callState.callerName);
             await emmaReply(userText,
               `Caller's name is ${callState.callerName}. Acknowledge it using first name only and ask for the best phone number to reach them.`,
@@ -3917,11 +3779,27 @@ wss.on('connection', (ws, req) => {
 
           // ===== ADDRESS =====
           if (callState.phoneConfirmed && !callState.address) {
-            callState.address = normalizeAddressForKnownZip(userText, callState.zip);
-            if (!callState.address) {
-              ws.send(JSON.stringify({ type: 'text', token: 'Could you say the full street address again?', last: true }));
+            const candidate = normalizeAddressForKnownZip(userText, callState.zip);
+            // Reject if no street name — strip number + city/state/zip, check something remains
+            const hasStreetName = (() => {
+              if (!candidate) return false;
+              let check = candidate.replace(/^\d+\s*/, '');
+              check = check.replace(/\s+Maryland\s*/gi, ' ').replace(/\s+MD\s*/gi, ' ');
+              check = check.replace(/\s+\d{5}\s*$/, '');
+              // Strip known city names from service area
+              const cities = ['Upper Marlboro','Severn','Bowie','Laurel','Odenton','Crofton','Pasadena',
+                'Glen Burnie','Annapolis','Columbia','Ellicott City','Hanover','Gambrills','Millersville',
+                'Mitchellville','Hyattsville','Lanham','Greenbelt','Suitland','Clinton','Catonsville','Pikesville'];
+              for (const city of cities) {
+                check = check.replace(new RegExp('\\s*\\b' + city + '\\b\\s*', 'gi'), ' ');
+              }
+              return check.trim().length >= 3;
+            })();
+            if (!candidate || !hasStreetName) {
+              ws.send(JSON.stringify({ type: 'text', token: "I didn't catch the street name. Please say the full address including house number and street name.", last: true }));
               break;
             }
+            callState.address = candidate;
             callState.addressConfirmed = false;
             ws.send(JSON.stringify({ type: 'text', token: `I heard ${formatAddressForSpeech(callState.address)}. Is that correct?`, last: true }));
             break;
@@ -3950,29 +3828,14 @@ wss.on('connection', (ws, req) => {
           }
 
           if (callState.awaitingEmail && !callState.email) {
-            let email = '';
-
-            if (callState.emailCorrectionMode && callState.emailCorrectionDomain) {
-              const localPart = normalizeSpelledEmailLocal(userText);
-              if (localPart) {
-                email = repairLiveEmail(`${localPart}@${callState.emailCorrectionDomain}`, userText);
-              } else {
-                email = extractLiveEmailFromSpeech(userText);
-              }
-            } else {
-              email = extractLiveEmailFromSpeech(userText);
-            }
-
-            if (!email || !email.includes('@')) {
-              ws.send(JSON.stringify({ type: 'text', token: "I didn't get that clearly. Please say the full email address slowly.", last: true }));
+            const email = fallbackExtractEmail(userText);
+            if (!email) {
+              ws.send(JSON.stringify({ type: 'text', token: "I didn't get that clearly — can you say the email again slowly?", last: true }));
               break;
             }
-
             callState.email = email;
             callState.awaitingEmail = false;
             callState.emailConfirmed = false;
-            callState.emailCorrectionMode = false;
-            callState.emailCorrectionDomain = '';
             ws.send(JSON.stringify({ type: 'text', token: `I have ${formatEmailForSpeech(callState.email)}. Is that correct?`, last: true }));
             break;
           }
@@ -4021,16 +3884,9 @@ wss.on('connection', (ws, req) => {
               callState.callEnded = true;
               setTimeout(() => { try { ws.close(); } catch (e) {} }, 25000);
             } else if (dec === 'no') {
-              const domain = getEmailDomain(callState.email);
               callState.email = null;
               callState.awaitingEmail = true;
-              callState.emailCorrectionMode = !!domain;
-              callState.emailCorrectionDomain = domain;
-              if (domain) {
-                ws.send(JSON.stringify({ type: 'text', token: `Okay. Please spell just the part before the at sign. I will keep ${domain.replace(/\./g, ' dot ')} as the domain.`, last: true }));
-              } else {
-                ws.send(JSON.stringify({ type: 'text', token: 'Okay. Please say the full email address again slowly.', last: true }));
-              }
+              ws.send(JSON.stringify({ type: 'text', token: 'Okay, go ahead and say the email address again.', last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: `I have ${formatEmailForSpeech(callState.email)}. Is that correct?`, last: true }));
             }
