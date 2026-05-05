@@ -3553,7 +3553,7 @@ wss.on('connection', (ws, req) => {
     offeredSlots: [], selectedSlot: null,
     timeWindow: '', serviceDate: '', callerName: '', phone: null,
     phoneConfirmed: false, address: null, addressConfirmed: false,
-    email: null, emailConfirmed: false, awaitingEmail: false, emailCorrectionMode: false, emailCorrectionDomain: '', booked: false,
+    email: null, emailConfirmed: false, awaitingEmail: false, booked: false,
     askedLastStarted: false, lastStartedAnswer: '', issueNeedsLastStarted: false,
     issueNeedsTuneUpClarification: false, gaveTuneUpClarification: false,
     pendingIssue: null, pendingIssueNeedsLastStarted: false,
@@ -3804,11 +3804,18 @@ wss.on('connection', (ws, req) => {
           }
 
           // ===== MACHINE KNOWN, NO ISSUE =====
+          // Re-check issue from full utterance in case silent extraction just set it this turn
           if (callState.machine && !callState.issue) {
-            await emmaReply(userText,
-              `Machine is ${callState.machine}. Acknowledge it and ask what it's doing or not doing. One sentence.`,
-              `Got it — ${callState.machineSpoken || callState.machine.toLowerCase()}. What is it doing or not doing?`);
-            break;
+            const issueRecheck = cleanText(userText);
+            const hasSymptomNow = config.symptomKeywords.some(kw => issueRecheck.includes(kw));
+            if (hasSymptomNow) {
+              callState.issue = userText.trim();
+            } else {
+              await emmaReply(userText,
+                `Machine is ${callState.machine}. Acknowledge it and ask what it's doing or not doing. One sentence.`,
+                `Got it — ${callState.machineSpoken || callState.machine.toLowerCase()}. What is it doing or not doing?`);
+              break;
+            }
           }
 
           // ===== ASK TO SCHEDULE =====
@@ -3995,29 +4002,15 @@ wss.on('connection', (ws, req) => {
           }
 
           if (callState.awaitingEmail && !callState.email) {
-            let email = '';
-
-            if (callState.emailCorrectionMode && callState.emailCorrectionDomain) {
-              const localPart = normalizeSpelledEmailLocal(userText);
-              if (localPart) {
-                email = repairLiveEmail(`${localPart}@${callState.emailCorrectionDomain}`, userText);
-              } else {
-                email = extractLiveEmailFromSpeech(userText);
-              }
-            } else {
-              email = extractLiveEmailFromSpeech(userText);
-            }
-
+            ws.send(JSON.stringify({ type: 'text', token: 'Got it.', last: false }));
+            const email = await extractEmailViaGPT(userText, callState.callerName);
             if (!email || !email.includes('@')) {
               ws.send(JSON.stringify({ type: 'text', token: "I didn't get that clearly. Please say the full email address slowly.", last: true }));
               break;
             }
-
             callState.email = email;
             callState.awaitingEmail = false;
             callState.emailConfirmed = false;
-            callState.emailCorrectionMode = false;
-            callState.emailCorrectionDomain = '';
             ws.send(JSON.stringify({ type: 'text', token: `I have ${formatEmailForSpeech(callState.email)}. Is that correct?`, last: true }));
             break;
           }
@@ -4066,16 +4059,9 @@ wss.on('connection', (ws, req) => {
               callState.callEnded = true;
               setTimeout(() => { try { ws.close(); } catch (e) {} }, 25000);
             } else if (dec === 'no') {
-              const domain = getEmailDomain(callState.email);
               callState.email = null;
               callState.awaitingEmail = true;
-              callState.emailCorrectionMode = !!domain;
-              callState.emailCorrectionDomain = domain;
-              if (domain) {
-                ws.send(JSON.stringify({ type: 'text', token: `Okay. Please spell just the part before the at sign. I will keep ${domain.replace(/\./g, ' dot ')} as the domain.`, last: true }));
-              } else {
-                ws.send(JSON.stringify({ type: 'text', token: 'Okay. Please say the full email address again slowly.', last: true }));
-              }
+              ws.send(JSON.stringify({ type: 'text', token: 'Okay, go ahead and say the email address again slowly.', last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: `I have ${formatEmailForSpeech(callState.email)}. Is that correct?`, last: true }));
             }
