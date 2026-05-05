@@ -3748,7 +3748,7 @@ wss.on('connection', (ws, req) => {
               if (callState.inScheduling) {
                 const slots = await findAvailableSlots(callState.zip, 1, 1);
                 callState.offeredSlots = slots;
-                const avail = slots.length ? `Great. ${buildAvailabilitySpeech(slots)}` : 'We service that area but have no openings right now. Please call back soon.';
+                const avail = slots.length ? `Great, we service that area. ${buildAvailabilitySpeech(slots)}` : 'We service that area, but there are no openings right now. Please call back soon.';
                 ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
               } else {
                 await emmaReply(userText,
@@ -3758,7 +3758,7 @@ wss.on('connection', (ws, req) => {
             } else if (dec === 'no') {
               callState.awaitingZipConfirmation = false;
               callState.zip = '';
-              ws.send(JSON.stringify({ type: 'text', token: 'Okay, what is your five digit ZIP code?', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'Okay. What is the correct five digit ZIP code?', last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: `I heard ZIP code ${callState.zip}. Is that correct?`, last: true }));
             }
@@ -3821,9 +3821,10 @@ wss.on('connection', (ws, req) => {
           // ===== ASK TO SCHEDULE =====
           if (callState.machine && callState.issue && !callState.askedForSchedule && !callState.inScheduling) {
             callState.askedForSchedule = true;
+            const spokenMachine = callState.machineSpoken || callState.machine.toLowerCase();
             await emmaReply(userText,
-              `Machine is ${callState.machine}, issue is noted. Briefly acknowledge and ask if they want to schedule an appointment.`,
-              `Would you like to schedule a time for us to come take a look?`);
+              `Machine is ${callState.machine}, issue is noted. Briefly acknowledge the machine and ask if they want to schedule an appointment.`,
+              `Got it — ${spokenMachine}. Would you like to schedule a time for us to come take a look?`);
             break;
           }
 
@@ -3836,10 +3837,10 @@ wss.on('connection', (ws, req) => {
               if (callState.zipConfirmed) {
                 const slots = await findAvailableSlots(callState.zip, 1, 1);
                 callState.offeredSlots = slots;
-                const avail = slots.length ? buildAvailabilitySpeech(slots) : 'Sorry, no openings right now. Please call back soon.';
+                const avail = slots.length ? `Great, we service that area. ${buildAvailabilitySpeech(slots)}` : 'We service that area, but there are no openings right now. Please call back soon.';
                 ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
               } else {
-                ws.send(JSON.stringify({ type: 'text', token: 'What is your five digit ZIP code?', last: true }));
+                ws.send(JSON.stringify({ type: 'text', token: 'Let me verify your ZIP code to make sure we service that area. What is your five digit ZIP code?', last: true }));
               }
             } else if (noWords.some(w => text.includes(w))) {
               await emmaReply(userText,
@@ -3863,7 +3864,7 @@ wss.on('connection', (ws, req) => {
               callState.awaitingZipConfirmation = true;
               ws.send(JSON.stringify({ type: 'text', token: `I heard ZIP code ${callState.zip}. Is that correct?`, last: true }));
             } else {
-              ws.send(JSON.stringify({ type: 'text', token: 'What is your five digit ZIP code?', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'Let me verify your ZIP code to make sure we service that area. What is your five digit ZIP code?', last: true }));
             }
             break;
           }
@@ -3872,7 +3873,7 @@ wss.on('connection', (ws, req) => {
           if (callState.zipConfirmed && callState.inScheduling && !callState.offeredSlots.length) {
             const slots = await findAvailableSlots(callState.zip, 1, 1);
             callState.offeredSlots = slots;
-            const avail = slots.length ? buildAvailabilitySpeech(slots) : 'No openings right now. Please call back soon.';
+            const avail = slots.length ? `Great, we service that area. ${buildAvailabilitySpeech(slots)}` : 'We service that area, but there are no openings right now. Please call back soon.';
             ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
             break;
           }
