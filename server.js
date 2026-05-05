@@ -3374,33 +3374,78 @@ app.get('/jobs', async (req, res) => {
     return;
   }
 
-  enrichedJobs.forEach((job) => {
-    const stop = stopNumbers[job.id];
-    const milesLabel = job.miles !== null ? `${job.miles} mi from home` : '';
-    const nearFarLabel = job.isFar !== null
-      ? (job.isFar ? `<span class="far">FAR</span>` : `<span class="near">NEAR</span>`)
-      : '';
+  // Separate appointment jobs from other jobs
+  const appointmentJobs = enrichedJobs.filter(j => j.requestType === 'Appointment Request' && j.serviceDate);
+  const otherJobs = enrichedJobs.filter(j => j.requestType !== 'Appointment Request' || !j.serviceDate);
 
-    html += `
+  // Group by serviceDate, sorted ascending
+  const dateGroups = {};
+  appointmentJobs.forEach(job => {
+    if (!dateGroups[job.serviceDate]) dateGroups[job.serviceDate] = [];
+    dateGroups[job.serviceDate].push(job);
+  });
+  const sortedDates = Object.keys(dateGroups).sort();
+
+  sortedDates.forEach(date => {
+    const dateJobs = dateGroups[date];
+    const morningWindow = routingConfig.fridaySaturdayMorningWindow;
+
+    // Sort: morning first, then nearest first within each window
+    dateJobs.sort((a, b) => {
+      const aM = a.serviceWindow === morningWindow ? 0 : 1;
+      const bM = b.serviceWindow === morningWindow ? 0 : 1;
+      if (aM !== bM) return aM - bM;
+      return (a.miles || 0) - (b.miles || 0);
+    });
+
+    const firstJob = dateJobs[0];
+    const dayLabel = firstJob.serviceDay || '';
+    const dateObj = new Date(date + 'T12:00:00');
+    const dateLabel = dateObj.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    html += `<h2 style="margin-top:24px;margin-bottom:8px;border-bottom:2px solid #1a73e8;padding-bottom:4px;">${dayLabel} &mdash; ${dateLabel} <span style="font-size:14px;font-weight:normal;color:#666;">(${dateJobs.length} stop${dateJobs.length !== 1 ? 's' : ''})</span></h2>`;
+
+    dateJobs.forEach((job, i) => {
+      const stop = i + 1;
+      const milesLabel = job.miles !== null ? `${job.miles} mi from home` : '';
+      const nearFarLabel = job.isFar !== null
+        ? (job.isFar ? `<span class="far">FAR</span>` : `<span class="near">NEAR</span>`)
+        : '';
+
+      html += `
   <div class="job">
-    ${stop ? `<div class="stop">Stop ${stop}</div>` : ''}
+    <div class="stop">Stop ${stop}</div>
+    <div class="line"><strong>${job.name || ''}</strong></div>
+    <div class="line">Machine: ${job.machine || ''}</div>
+    <div class="line">Problem: ${job.problem || ''}</div>
+    ${job.zip ? `<div class="line">ZIP: ${job.zip}${milesLabel ? ` &nbsp;&middot;&nbsp; ${milesLabel}` : ''}${nearFarLabel ? ` &nbsp;&middot;&nbsp; ${nearFarLabel}` : ''}</div>` : ''}
+    ${job.serviceWindow ? `<div class="line">Window: ${job.serviceWindow}</div>` : ''}
+    ${job.phone ? `<div class="line">Phone: ${job.phone}</div>` : ''}
+    ${job.address ? `<div class="line">Address: ${job.address}</div>` : ''}
+    ${job.email ? `<div class="line">Email: ${job.email}</div>` : ''}
+    ${job.serviceCounty ? `<div class="line">County: ${job.serviceCounty}</div>` : ''}
+    ${job.recording ? `<div class="line">Recording: <a href="${job.recording}" target="_blank">Listen</a></div>` : ''}
+  </div>
+`;
+    });
+  });
+
+  if (otherJobs.length > 0) {
+    html += `<h2 style="margin-top:24px;margin-bottom:8px;border-bottom:2px solid #999;padding-bottom:4px;">Other Requests</h2>`;
+    otherJobs.forEach(job => {
+      html += `
+  <div class="job">
     <strong>${job.time || ''}</strong>
     <div class="line">Type: ${job.requestType || ''}</div>
     <div class="line">Name: ${job.name || ''}</div>
     <div class="line">Machine: ${job.machine || ''}</div>
     <div class="line">Problem: ${job.problem || ''}</div>
-    ${job.zip ? `<div class="line">ZIP: ${job.zip}${milesLabel ? ` &nbsp;·&nbsp; ${milesLabel}` : ''}${nearFarLabel ? ` &nbsp;·&nbsp; ${nearFarLabel}` : ''}</div>` : ''}
+    ${job.zip ? `<div class="line">ZIP: ${job.zip}</div>` : ''}
     ${job.phone ? `<div class="line">Phone: ${job.phone}</div>` : ''}
-    ${job.address ? `<div class="line">Address: ${job.address}</div>` : ''}
-    ${job.email ? `<div class="line">Email: ${job.email}</div>` : ''}
-    ${job.serviceDate ? `<div class="line">Service Date: ${job.serviceDate}</div>` : ''}
-    ${job.serviceDay ? `<div class="line">Service Day: ${job.serviceDay}</div>` : ''}
-    ${job.serviceCounty ? `<div class="line">County: ${job.serviceCounty}</div>` : ''}
-    ${job.serviceWindow ? `<div class="line">Window: ${job.serviceWindow}</div>` : ''}
     ${job.recording ? `<div class="line">Recording: <a href="${job.recording}" target="_blank">Listen</a></div>` : ''}
   </div>
 `;
-  });
+    });
+  }
 
   html += `
 </body>
