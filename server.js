@@ -3532,13 +3532,34 @@ function normalizeCallerNameForLiveCall(rawName) {
 }
 
 function detectMachineFast(input) {
-  const cleaned = cleanText(applyLocalCorrections(input));
+  // Check the caller's original wording first.
+  // Do this BEFORE applyLocalCorrections(), because config maps
+  // "lawn tractor" to "riding mower" internally and that can hide
+  // the exact phrase we want to speak back to the caller.
+  const rawCleaned = cleanText(input);
 
-  if (cleaned.includes('riding mower') || cleaned.includes('ride on mower') || cleaned.includes('rider mower')) {
+  if (
+    rawCleaned.includes('lawn tractor') ||
+    rawCleaned.includes('tractor mower') ||
+    rawCleaned.includes('riding mower') ||
+    rawCleaned.includes('ride on mower') ||
+    rawCleaned.includes('rider mower') ||
+    rawCleaned === 'tractor' ||
+    rawCleaned.includes('my tractor') ||
+    rawCleaned.includes('the tractor')
+  ) {
     return 'Riding mower';
   }
 
-  if (cleaned.includes('lawn tractor') || cleaned.includes('tractor mower')) {
+  const correctedCleaned = cleanText(applyLocalCorrections(input));
+
+  if (
+    correctedCleaned.includes('riding mower') ||
+    correctedCleaned.includes('ride on mower') ||
+    correctedCleaned.includes('rider mower') ||
+    correctedCleaned.includes('lawn tractor') ||
+    correctedCleaned.includes('tractor mower')
+  ) {
     return 'Riding mower';
   }
 
@@ -3624,7 +3645,15 @@ wss.on('connection', (ws, req) => {
                 callState.pendingIssueNeedsLastStarted = false;
               } else {
                 const mc = cleanText(m);
-                const stripped = cleaned.replace(mc, '').trim();
+                const spokenMc = cleanText(callState.machineSpoken || '');
+                let stripped = cleaned.replace(mc, '').trim();
+                if (spokenMc) {
+                  stripped = stripped.replace(spokenMc, '').trim();
+                }
+                stripped = stripped
+                  .replace(/\b(my|the|a|an)\b/g, ' ')
+                  .replace(/\s+/g, ' ')
+                  .trim();
                 if (stripped.length > 0 && !callState.issue) {
                   const hasSymptom = config.symptomKeywords.some(kw => stripped.includes(kw));
                   const isNoStart = stripped.includes("won't start") || stripped.includes('wont start') ||
