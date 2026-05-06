@@ -879,9 +879,35 @@ function repairLiveEmail(email, rawText = '') {
   return sanitizeLooseEmail(`${local}@${domain}`);
 }
 
+function completeCommonEmailDomain(email) {
+  const value = sanitizeLooseEmail(email);
+  if (!value || !value.includes('@')) return value;
+
+  const [local, domainRaw] = value.split('@');
+  let domain = String(domainRaw || '').toLowerCase().trim();
+
+  const commonDomains = {
+    gmail: 'gmail.com',
+    googlemail: 'gmail.com',
+    hotmail: 'hotmail.com',
+    outlook: 'outlook.com',
+    yahoo: 'yahoo.com',
+    icloud: 'icloud.com',
+    aol: 'aol.com',
+    comcast: 'comcast.net',
+    verizon: 'verizon.net'
+  };
+
+  if (commonDomains[domain]) {
+    domain = commonDomains[domain];
+  }
+
+  return sanitizeLooseEmail(`${local}@${domain}`);
+}
+
 function extractLiveEmailFromSpeech(rawText) {
   const email = fallbackExtractEmail(rawText);
-  return repairLiveEmail(email, rawText);
+  return completeCommonEmailDomain(repairLiveEmail(email, rawText));
 }
 
 function getEmailDomain(email) {
@@ -4032,10 +4058,9 @@ wss.on('connection', (ws, req) => {
           }
 
           if (callState.awaitingEmail && !callState.email) {
-            ws.send(JSON.stringify({ type: 'text', token: 'Got it.', last: false }));
-            const email = await extractEmailViaGPT(userText, callState.callerName);
-            if (!email || !email.includes('@')) {
-              ws.send(JSON.stringify({ type: 'text', token: "I didn't get that clearly. Please say the full email address slowly.", last: true }));
+            const email = extractLiveEmailFromSpeech(userText);
+            if (!email || !email.includes('@') || !isAcceptableEmail(email)) {
+              ws.send(JSON.stringify({ type: 'text', token: "I didn't get that clearly. Please say the full email address slowly, including the part after the at sign.", last: true }));
               break;
             }
             callState.email = email;
