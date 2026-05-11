@@ -3616,6 +3616,42 @@ function buildRepairDetailQuestion(machineLabel) {
   return `Got it. What kind of repair does your ${label} need?`;
 }
 
+function isVagueProblemRequest(input) {
+  const cleaned = cleanText(input);
+  return (
+    cleaned.includes('not working') ||
+    cleaned.includes('does not work') ||
+    cleaned.includes('doesn t work') ||
+    cleaned.includes('dont work') ||
+    cleaned.includes('don t work') ||
+    cleaned.includes('is broke') ||
+    cleaned.includes('is broken') ||
+    cleaned.includes('broke down') ||
+    cleaned.includes('broken down') ||
+    cleaned.includes('acting up') ||
+    cleaned.includes('having problems') ||
+    cleaned.includes('has problems') ||
+    cleaned.includes('some problems') ||
+    cleaned.includes('having issues') ||
+    cleaned.includes('has issues') ||
+    cleaned.includes('some issues')
+  );
+}
+
+function buildMissingIssueQuestion(userText, machineLabel) {
+  const label = String(machineLabel || 'machine').toLowerCase();
+
+  if (isGenericRepairRequest(userText)) {
+    return `Got it. What kind of repair does your ${label} need?`;
+  }
+
+  if (isVagueProblemRequest(userText)) {
+    return `Got it, ${label}. What problem are you having with it?`;
+  }
+
+  return `Got it, ${label}. What problem are you having with it?`;
+}
+
 wss.on('connection', (ws, req) => {
   console.log('ConversationRelay connected');
   const callState = {
@@ -3883,13 +3919,11 @@ wss.on('connection', (ws, req) => {
               callState.issue = userText.trim();
             } else {
               const spokenMachine = callState.machineSpoken || callState.machine.toLowerCase();
-              const fallbackQuestion = isGenericRepairRequest(userText)
-                ? buildRepairDetailQuestion(spokenMachine)
-                : `Got it, ${spokenMachine}. What is it doing or not doing?`;
+              const fallbackQuestion = buildMissingIssueQuestion(userText, spokenMachine);
 
-              await emmaReply(userText,
-                `Machine is ${callState.machine}. Ask one clear follow-up for the missing issue. If the caller only said it needs repair, ask what kind of repair it needs. Do not ask for ZIP, phone, address, email, or scheduling yet.`,
-                fallbackQuestion);
+              // Keep this first follow-up deterministic. Do not call AI here, because
+              // AI kept drifting back to the old "what is it doing or not doing" wording.
+              ws.send(JSON.stringify({ type: 'text', token: fallbackQuestion, last: true }));
               break;
             }
           }
