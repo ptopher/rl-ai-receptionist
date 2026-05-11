@@ -678,6 +678,39 @@ function sanitizeLooseEmail(email) {
     .trim();
 }
 
+
+function completeCommonEmailDomain(email) {
+  let value = sanitizeLooseEmail(email);
+  if (!value || !value.includes('@')) return value;
+
+  const parts = value.split('@');
+  if (parts.length !== 2) return value;
+
+  const local = parts[0];
+  let domain = parts[1] || '';
+  if (!local || !domain) return value;
+
+  domain = domain.replace(/\.+$/g, '');
+
+  const commonDomains = {
+    gmail: 'gmail.com',
+    googlemail: 'gmail.com',
+    hotmail: 'hotmail.com',
+    yahoo: 'yahoo.com',
+    outlook: 'outlook.com',
+    icloud: 'icloud.com',
+    aol: 'aol.com',
+    live: 'live.com',
+    msn: 'msn.com'
+  };
+
+  if (commonDomains[domain]) {
+    domain = commonDomains[domain];
+  }
+
+  return sanitizeLooseEmail(`${local}@${domain}`);
+}
+
 function extractEmailFromSpeech(req) {
   const raw = String(req.body.SpeechResult || '').trim();
   if (!raw) return '';
@@ -862,7 +895,7 @@ function formatEmailForSpeech(email) {
 }
 
 function repairLiveEmail(email, rawText = '') {
-  let value = sanitizeLooseEmail(email);
+  let value = completeCommonEmailDomain(email);
   if (!value || !value.includes('@')) return value;
 
   const raw = String(rawText || '').toLowerCase();
@@ -870,13 +903,16 @@ function repairLiveEmail(email, rawText = '') {
   let local = localRaw || '';
   const domain = domainRaw || '';
 
-  // Phone transcripts often add punctuation dots between spoken letters/numbers.
-  // Keep a dot only when the caller explicitly says the word "dot" or "period".
+  // Phone transcripts often add punctuation dots or hyphens between spelled letters/numbers.
+  // Keep punctuation only when the caller explicitly says the word "dot", "period", "dash", or "hyphen".
   if (!/\b(dot|period)\b/.test(raw)) {
     local = local.replace(/\./g, '');
   }
+  if (!/\b(dash|hyphen)\b/.test(raw)) {
+    local = local.replace(/-/g, '');
+  }
 
-  return sanitizeLooseEmail(`${local}@${domain}`);
+  return completeCommonEmailDomain(`${local}@${domain}`);
 }
 
 function extractLiveEmailFromSpeech(rawText) {
@@ -3652,6 +3688,50 @@ function buildMissingIssueQuestion(userText, machineLabel) {
   return `Got it, ${label}. What problem are you having with it?`;
 }
 
+
+function cleanMachineForSavedJob(machine, machineSpoken = '', issue = '') {
+  const combined = cleanText(`${machine || ''} ${machineSpoken || ''} ${issue || ''}`);
+
+  if (combined.includes('lawn tractor') || combined.includes('riding mower') || combined.includes('ride on mower') || combined.includes('rider mower')) {
+    return 'Riding mower';
+  }
+  if (combined.includes('push mower') || combined.includes('walk behind') || combined.includes('walk-behind')) {
+    return 'Push mower';
+  }
+  if (combined.includes('self propelled') || combined.includes('self-propelled')) {
+    return 'Self-propelled mower';
+  }
+
+  const value = String(machine || '').trim();
+  return value || 'Machine';
+}
+
+function cleanIssueForSavedJob(issue, machine, machineSpoken = '') {
+  let value = String(issue || '').trim();
+
+  value = value
+    .replace(/^\s*(alrighty|alright|okay|ok|got it|thanks|thank you)[,\.\s-]*/i, '')
+    .replace(/^\s*(the\s+)?(mower|lawnmower|lawn mower|riding mower|lawn tractor|push mower|machine|equipment)\s+(is|has|have|needs?)\s+/i, '')
+    .replace(/^\s*(is|has|have|needs?)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const cleaned = cleanText(value);
+  if (
+    cleaned.includes('not starting') ||
+    cleaned.includes('won t start') ||
+    cleaned.includes('wont start') ||
+    cleaned.includes('will not start') ||
+    cleaned.includes('no start') ||
+    cleaned.includes('doesn t start')
+  ) {
+    return "Won't start";
+  }
+
+  if (!value) return 'Issue not specified';
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 wss.on('connection', (ws, req) => {
   console.log('ConversationRelay connected');
   const callState = {
@@ -4112,8 +4192,7 @@ wss.on('connection', (ws, req) => {
           }
 
           if (callState.awaitingEmail && !callState.email) {
-            ws.send(JSON.stringify({ type: 'text', token: 'Got it.', last: false }));
-            const email = await extractEmailViaGPT(userText, callState.callerName);
+            const email = extractLiveEmailFromSpeech(userText);
             if (!email || !email.includes('@')) {
               ws.send(JSON.stringify({ type: 'text', token: "I didn't get that clearly. Please say the full email address slowly.", last: true }));
               break;
@@ -4129,12 +4208,17 @@ wss.on('connection', (ws, req) => {
             const dec = detectYesNoText(userText);
             if (dec === 'yes') {
               callState.emailConfirmed = true;
+              const savedMachine = cleanMachineForSavedJob(callState.machine, callState.machineSpoken, callState.issue);
+              const savedIssue = cleanIssueForSavedJob(callState.issue, callState.machine, callState.machineSpoken);
+              callState.machine = savedMachine;
+              callState.issue = savedIssue;
+
               const job = {
                 id: generateJobId(),
                 requestType: 'Appointment Request',
                 name: callState.callerName,
-                machine: callState.machine,
-                problem: callState.issue,
+                machine: savedMachine,
+                problem: savedIssue,
                 zip: callState.zip,
                 phone: callState.phone,
                 address: callState.address,
@@ -4152,8 +4236,8 @@ wss.on('connection', (ws, req) => {
                 await sendAppointmentConfirmationEmail({
                   to: callState.email,
                   name: callState.callerName,
-                  machine: callState.machine,
-                  issue: callState.issue,
+                  machine: savedMachine,
+                  issue: savedIssue,
                   serviceDate: callState.serviceDate,
                   serviceWindow: callState.timeWindow,
                   address: callState.address
@@ -4163,7 +4247,7 @@ wss.on('connection', (ws, req) => {
               }
               ws.send(JSON.stringify({
                 type: 'text',
-                token: `You're all set for ${getReadableDate(callState.serviceDate)}, from ${callState.timeWindow}. Confirmation is on its way to that email. We look forward to helping with your ${callState.machineSpoken || callState.machine.toLowerCase()}. Goodbye.`,
+                token: `You're all set for ${getReadableDate(callState.serviceDate)}, from ${callState.timeWindow}. Confirmation is on its way to that email. We look forward to helping with your ${(callState.machineSpoken || savedMachine).toLowerCase()}. Goodbye.`,
                 last: true
               }));
               callState.callEnded = true;
