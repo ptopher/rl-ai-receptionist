@@ -879,35 +879,9 @@ function repairLiveEmail(email, rawText = '') {
   return sanitizeLooseEmail(`${local}@${domain}`);
 }
 
-function completeCommonEmailDomain(email) {
-  const value = sanitizeLooseEmail(email);
-  if (!value || !value.includes('@')) return value;
-
-  const [local, domainRaw] = value.split('@');
-  let domain = String(domainRaw || '').toLowerCase().trim();
-
-  const commonDomains = {
-    gmail: 'gmail.com',
-    googlemail: 'gmail.com',
-    hotmail: 'hotmail.com',
-    outlook: 'outlook.com',
-    yahoo: 'yahoo.com',
-    icloud: 'icloud.com',
-    aol: 'aol.com',
-    comcast: 'comcast.net',
-    verizon: 'verizon.net'
-  };
-
-  if (commonDomains[domain]) {
-    domain = commonDomains[domain];
-  }
-
-  return sanitizeLooseEmail(`${local}@${domain}`);
-}
-
 function extractLiveEmailFromSpeech(rawText) {
   const email = fallbackExtractEmail(rawText);
-  return completeCommonEmailDomain(repairLiveEmail(email, rawText));
+  return repairLiveEmail(email, rawText);
 }
 
 function getEmailDomain(email) {
@@ -3558,34 +3532,13 @@ function normalizeCallerNameForLiveCall(rawName) {
 }
 
 function detectMachineFast(input) {
-  // Check the caller's original wording first.
-  // Do this BEFORE applyLocalCorrections(), because config maps
-  // "lawn tractor" to "riding mower" internally and that can hide
-  // the exact phrase we want to speak back to the caller.
-  const rawCleaned = cleanText(input);
+  const cleaned = cleanText(applyLocalCorrections(input));
 
-  if (
-    rawCleaned.includes('lawn tractor') ||
-    rawCleaned.includes('tractor mower') ||
-    rawCleaned.includes('riding mower') ||
-    rawCleaned.includes('ride on mower') ||
-    rawCleaned.includes('rider mower') ||
-    rawCleaned === 'tractor' ||
-    rawCleaned.includes('my tractor') ||
-    rawCleaned.includes('the tractor')
-  ) {
+  if (cleaned.includes('riding mower') || cleaned.includes('ride on mower') || cleaned.includes('rider mower')) {
     return 'Riding mower';
   }
 
-  const correctedCleaned = cleanText(applyLocalCorrections(input));
-
-  if (
-    correctedCleaned.includes('riding mower') ||
-    correctedCleaned.includes('ride on mower') ||
-    correctedCleaned.includes('rider mower') ||
-    correctedCleaned.includes('lawn tractor') ||
-    correctedCleaned.includes('tractor mower')
-  ) {
+  if (cleaned.includes('lawn tractor') || cleaned.includes('tractor mower')) {
     return 'Riding mower';
   }
 
@@ -3596,7 +3549,7 @@ wss.on('connection', (ws, req) => {
   console.log('ConversationRelay connected');
   const callState = {
     machine: '', machineSpoken: '', issue: '', zip: '', awaitingZipConfirmation: false,
-    zipConfirmed: false, serviceable: false, askedForSchedule: false, inScheduling: false,
+    zipConfirmed: false, serviceable: false, machineVerified: false, askedForSchedule: false, inScheduling: false,
     offeredSlots: [], selectedSlot: null,
     timeWindow: '', serviceDate: '', callerName: '', phone: null,
     phoneConfirmed: false, address: null, addressConfirmed: false,
@@ -3671,15 +3624,7 @@ wss.on('connection', (ws, req) => {
                 callState.pendingIssueNeedsLastStarted = false;
               } else {
                 const mc = cleanText(m);
-                const spokenMc = cleanText(callState.machineSpoken || '');
-                let stripped = cleaned.replace(mc, '').trim();
-                if (spokenMc) {
-                  stripped = stripped.replace(spokenMc, '').trim();
-                }
-                stripped = stripped
-                  .replace(/\b(my|the|a|an)\b/g, ' ')
-                  .replace(/\s+/g, ' ')
-                  .trim();
+                const stripped = cleaned.replace(mc, '').trim();
                 if (stripped.length > 0 && !callState.issue) {
                   const hasSymptom = config.symptomKeywords.some(kw => stripped.includes(kw));
                   const isNoStart = stripped.includes("won't start") || stripped.includes('wont start') ||
@@ -3803,7 +3748,7 @@ wss.on('connection', (ws, req) => {
               if (callState.inScheduling) {
                 const slots = await findAvailableSlots(callState.zip, 1, 1);
                 callState.offeredSlots = slots;
-                const avail = slots.length ? `Great, we service that area. ${buildAvailabilitySpeech(slots)}` : 'We service that area, but there are no openings right now. Please call back soon.';
+                const avail = slots.length ? `Great. ${buildAvailabilitySpeech(slots)}` : 'We service that area but have no openings right now. Please call back soon.';
                 ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
               } else {
                 await emmaReply(userText,
@@ -3813,7 +3758,7 @@ wss.on('connection', (ws, req) => {
             } else if (dec === 'no') {
               callState.awaitingZipConfirmation = false;
               callState.zip = '';
-              ws.send(JSON.stringify({ type: 'text', token: 'Okay. What is the correct five digit ZIP code?', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'Okay, what is your five digit ZIP code?', last: true }));
             } else {
               ws.send(JSON.stringify({ type: 'text', token: `I heard ZIP code ${callState.zip}. Is that correct?`, last: true }));
             }
@@ -3873,13 +3818,22 @@ wss.on('connection', (ws, req) => {
             }
           }
 
+          // ===== MACHINE VERIFICATION =====
+          // Confirm machine type with caller before moving to schedule
+          if (callState.machine && !callState.machineVerified) {
+            callState.machineVerified = true;
+            await emmaReply(userText,
+              `Confirm with the caller that you have the right machine (${callState.machineSpoken || callState.machine}) and the issue (${callState.issue || 'noted'}). Then ask if they want to schedule. One or two natural sentences.`,
+              `Got it — ${callState.machineSpoken || callState.machine.toLowerCase()} needing ${callState.issue ? 'some work' : 'a look'}. Would you like to schedule a time for us to come out?`);
+            break;
+          }
+
           // ===== ASK TO SCHEDULE =====
           if (callState.machine && callState.issue && !callState.askedForSchedule && !callState.inScheduling) {
             callState.askedForSchedule = true;
-            const spokenMachine = callState.machineSpoken || callState.machine.toLowerCase();
             await emmaReply(userText,
-              `Machine is ${callState.machine}, issue is noted. Briefly acknowledge the machine and ask if they want to schedule an appointment.`,
-              `Got it — ${spokenMachine}. Would you like to schedule a time for us to come take a look?`);
+              `Ask if they want to schedule an appointment. One sentence.`,
+              `Would you like to schedule a time for us to come take a look?`);
             break;
           }
 
@@ -3892,10 +3846,10 @@ wss.on('connection', (ws, req) => {
               if (callState.zipConfirmed) {
                 const slots = await findAvailableSlots(callState.zip, 1, 1);
                 callState.offeredSlots = slots;
-                const avail = slots.length ? `Great, we service that area. ${buildAvailabilitySpeech(slots)}` : 'We service that area, but there are no openings right now. Please call back soon.';
+                const avail = slots.length ? buildAvailabilitySpeech(slots) : 'Sorry, no openings right now. Please call back soon.';
                 ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
               } else {
-                ws.send(JSON.stringify({ type: 'text', token: 'Let me verify your ZIP code to make sure we service that area. What is your five digit ZIP code?', last: true }));
+                ws.send(JSON.stringify({ type: 'text', token: 'Let me verify we service your area. What is your five digit ZIP code?', last: true }));
               }
             } else if (noWords.some(w => text.includes(w))) {
               await emmaReply(userText,
@@ -3919,7 +3873,7 @@ wss.on('connection', (ws, req) => {
               callState.awaitingZipConfirmation = true;
               ws.send(JSON.stringify({ type: 'text', token: `I heard ZIP code ${callState.zip}. Is that correct?`, last: true }));
             } else {
-              ws.send(JSON.stringify({ type: 'text', token: 'Let me verify your ZIP code to make sure we service that area. What is your five digit ZIP code?', last: true }));
+              ws.send(JSON.stringify({ type: 'text', token: 'What is your five digit ZIP code?', last: true }));
             }
             break;
           }
@@ -3928,7 +3882,7 @@ wss.on('connection', (ws, req) => {
           if (callState.zipConfirmed && callState.inScheduling && !callState.offeredSlots.length) {
             const slots = await findAvailableSlots(callState.zip, 1, 1);
             callState.offeredSlots = slots;
-            const avail = slots.length ? `Great, we service that area. ${buildAvailabilitySpeech(slots)}` : 'We service that area, but there are no openings right now. Please call back soon.';
+            const avail = slots.length ? buildAvailabilitySpeech(slots) : 'No openings right now. Please call back soon.';
             ws.send(JSON.stringify({ type: 'text', token: avail, last: true }));
             break;
           }
@@ -4058,9 +4012,10 @@ wss.on('connection', (ws, req) => {
           }
 
           if (callState.awaitingEmail && !callState.email) {
-            const email = extractLiveEmailFromSpeech(userText);
-            if (!email || !email.includes('@') || !isAcceptableEmail(email)) {
-              ws.send(JSON.stringify({ type: 'text', token: "I didn't get that clearly. Please say the full email address slowly, including the part after the at sign.", last: true }));
+            ws.send(JSON.stringify({ type: 'text', token: 'Got it.', last: false }));
+            const email = await extractEmailViaGPT(userText, callState.callerName);
+            if (!email || !email.includes('@')) {
+              ws.send(JSON.stringify({ type: 'text', token: "I didn't get that clearly. Please say the full email address slowly.", last: true }));
               break;
             }
             callState.email = email;
