@@ -3593,6 +3593,29 @@ function detectMachineFast(input) {
   return detectMachine(input);
 }
 
+function isGenericRepairRequest(input) {
+  const cleaned = cleanText(input);
+  return (
+    cleaned.includes('needs some repair') ||
+    cleaned.includes('need some repair') ||
+    cleaned.includes('needs repair') ||
+    cleaned.includes('need repair') ||
+    cleaned.includes('needs repairs') ||
+    cleaned.includes('need repairs') ||
+    cleaned.includes('needs fixed') ||
+    cleaned.includes('need fixed') ||
+    cleaned.includes('needs fixing') ||
+    cleaned.includes('need fixing') ||
+    cleaned.includes('needs service') ||
+    cleaned.includes('need service')
+  );
+}
+
+function buildRepairDetailQuestion(machineLabel) {
+  const label = String(machineLabel || 'machine').toLowerCase();
+  return `Got it. What kind of repair does your ${label} need?`;
+}
+
 wss.on('connection', (ws, req) => {
   console.log('ConversationRelay connected');
   const callState = {
@@ -3859,9 +3882,14 @@ wss.on('connection', (ws, req) => {
             if (hasSymptomNow) {
               callState.issue = userText.trim();
             } else {
+              const spokenMachine = callState.machineSpoken || callState.machine.toLowerCase();
+              const fallbackQuestion = isGenericRepairRequest(userText)
+                ? buildRepairDetailQuestion(spokenMachine)
+                : `Got it, ${spokenMachine}. What is it doing or not doing?`;
+
               await emmaReply(userText,
-                `Machine is ${callState.machine}. Acknowledge it and ask what it's doing or not doing. One sentence.`,
-                `Got it, ${callState.machineSpoken || callState.machine.toLowerCase()}. What is it doing or not doing?`);
+                `Machine is ${callState.machine}. Ask one clear follow-up for the missing issue. If the caller only said it needs repair, ask what kind of repair it needs. Do not ask for ZIP, phone, address, email, or scheduling yet.`,
+                fallbackQuestion);
               break;
             }
           }
