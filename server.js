@@ -1456,7 +1456,9 @@ const localZipCityMap = {
 };
 
 function normalizeAddressForKnownZip(rawAddress, expectedZip) {
-  const rejoined = rejoinSpacedDigits(rawAddress || '');
+  // Fix common Twilio city mishearings before normalizing
+  const fixedRaw = String(rawAddress || '').replace(/\bseverna\b/gi, 'Severn');
+  const rejoined = rejoinSpacedDigits(fixedRaw);
   let streetOnly = normalizeAddressTextPreserveStreet(rejoined);
 
   if (!expectedZip) return streetOnly;
@@ -4071,11 +4073,12 @@ wss.on('connection', (ws, req) => {
           if (callState.inScheduling && callState.offeredSlots.length && !callState.selectedSlot) {
             const tempReq = { body: { SpeechResult: userText, Digits: '' } };
             let chosen = detectNaturalSlot(tempReq, callState.offeredSlots);
-            const yesToOnlyOption = detectYesNoText(userText) === 'yes' && callState.offeredSlots.length === 1;
-            if (!chosen && yesToOnlyOption) {
+            const dec = detectYesNoText(userText);
+            // When only one slot is offered, any "yes" picks it — no ambiguity
+            if (!chosen && dec === 'yes' && callState.offeredSlots.length === 1) {
               chosen = callState.offeredSlots[0];
             }
-            const noToOfferedAppointment = detectYesNoText(userText) === 'no';
+            const noToOfferedAppointment = dec === 'no';
             const noneWork = noToOfferedAppointment || cleaned.includes('none') || cleaned.includes('neither') ||
               cleaned.includes('not available') || cleaned.includes('don t work') ||
               cleaned.includes('dont work') || cleaned.includes('something else') ||
