@@ -1091,12 +1091,14 @@ function buildAvailabilitySpeech(slots) {
     return 'There are no available appointments right now.';
   }
 
+  const serviceDaysNotice = 'Right now, appointment days are Fridays and Saturdays only.';
+
   if (slots.length === 1) {
-    return `The earliest I have for your ZIP code is ${formatSlotPhrase(slots[0])}. Does that work for you?`;
+    return `${serviceDaysNotice} The earliest I have for your ZIP code is ${formatSlotPhrase(slots[0])}. Does that work for you?`;
   }
 
   const options = slots.map(formatSlotPhrase);
-  return `For your ZIP code, I have ${options.join(', ')}. Which would you prefer?`;
+  return `${serviceDaysNotice} For your ZIP code, I have ${options.join(', ')}. Which would you prefer?`;
 }
 function detectNaturalSlot(req, slots) {
   const speech = (req.body.SpeechResult || '').toLowerCase();
@@ -3713,8 +3715,14 @@ function cleanIssueForSavedJob(issue, machine, machineSpoken = '') {
 
   value = value
     .replace(/^\s*(alrighty|alright|okay|ok|got it|thanks|thank you)[,\.\s-]*/i, '')
-    .replace(/^\s*(the\s+)?(mower|lawnmower|lawn mower|riding mower|lawn tractor|push mower|machine|equipment)\s+(is|has|have|needs?)\s+/i, '')
-    .replace(/^\s*(is|has|have|needs?)\s+/i, '')
+    .replace(/^\s*(please\s+)?(give me|gave me|gimme)\s+(some\s+)?/i, '')
+    .replace(/^\s*(i\s+)?(need|needs|needed)\s+(some\s+)?/i, '')
+    .replace(/^\s*(it|this|that|the unit|the machine|the mower|mower|lawnmower|lawn mower|riding mower|lawn tractor|push mower|machine|equipment)\s+(is|has|have|needs?|needed)\s+(some\s+)?/i, '')
+    .replace(/^\s*(the\s+)?(mower|lawnmower|lawn mower|riding mower|lawn tractor|push mower|machine|equipment)\s+(is|has|have|needs?|needed)\s+(some\s+)?/i, '')
+    .replace(/^\s*(is|has|have|needs?|needed)\s+(some\s+)?/i, '')
+    .replace(/self\s+propel/gi, 'self-propelled')
+    .replace(/self\s+propelled/gi, 'self-propelled')
+    .replace(/self-propel/gi, 'self-propelled')
     .replace(/\s+/g, ' ')
     .trim();
 
